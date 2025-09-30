@@ -118,4 +118,4 @@ echo "Cleaning up..."
 rm -f /root/change_name.sh
 
 print_success "User change complete!"
-print_info "Please reconnect using ssh as $NEW_USERNAME"
+print_info "Please reconnect using ssh as $NEW_USERNAME \e[31m!! ON PORT 42 !!\e[0m"

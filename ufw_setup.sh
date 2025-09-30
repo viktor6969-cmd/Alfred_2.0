@@ -1,20 +1,33 @@
 #!/usr/bin/env bash
 
-# Load environment variables
-if [ -f .env ]; then
-    source .env
+# ==================================================================================
+# UFW SETUP (packages, UFW, SSH cosmetics, auto updates)
+# ==================================================================================
+# Expectations from you:
+# - Run this from the project directory (same dir as .env and utils.sh)
+# - Run via: sudo bash ./main_setup.sh (or as root)
+# ==================================================================================
+
+set -euo pipefail
+
+[ "${EUID:-$(id -u)}" -eq 0 ] || { print_error "Please run as root (sudo)."; exit 1; }
+
+# Load helpers and env
+if [ -f ./utils.sh ]; then
+    # shellcheck disable=SC1091
+    source ./utils.sh
 else
-    echo "Error: .env file not found!"
+    echo "utils.sh file not found!"
     exit 1
 fi
+load_env
+
+
 
 # Validate required environment variables
-required_vars=("SSH_PORT" "NGINX_PORTS" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "MASTER_IP" "PACKAGES")
+required_vars=("PACKAGES" "NGINX_PORTS" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "UFW_ALLOW_SERVICES")
 for var in "${required_vars[@]}"; do
-    if [ -z "${!var}" ]; then
-        echo "Error: $var is not set in .env file!"
-        exit 1
-    fi
+  [ -n "${!var:-}" ] || { echo "Error: $var is not set in .env file!"; exit 1; }
 done
 
 #-------------- Packeges ---------------# 
@@ -25,14 +38,19 @@ sudo apt install -y $PACKAGES
 
 
 #----------------- UFW -----------------#
+# - Set defaults (from .env)
+# - Allow SSH port from .env to avoid lockout
+# - Allow additional services/ports
+# - Enable UFW non-interactively
 
-# Configure UFW
-echo "Configuring UFW..."
+print_info "Configuring UFW..."
+
+# Default policies
+ufw default "$UFW_DEFAULT_INCOMING" incoming
+ufw default "$UFW_DEFAULT_OUTGOING" outgoing
 
 # Criete Profiles in /
 sudo ufw allow $UFW_ALLOW_SERVICES
-sudo ufw default $UFW_DEFAULT_INCOMING incoming
-sudo ufw default $UFW_DEFAULT_OUTGOING outgoing
 sudo ufw enable
 
 # Add IP to whitelist

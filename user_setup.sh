@@ -10,9 +10,11 @@
 # ==================================================================================
 
 set -euo pipefail
-    
+
+[ "${EUID:-$(id -u)}" -eq 0 ] || { print_error "Please run as root (sudo)."; exit 1; }
 # Load environment variables
 if [ -f ./utils.sh ]; then
+    # shellcheck disable=SC1091
     source ./utils.sh
 else
     echo "utils.sh file not found!"
@@ -22,9 +24,18 @@ fi
 # Load the .env file
 load_env
 
-# Set root password
-print_info "Setting root password..."
-printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
+
+#------------------------------------------------------------------------------------
+# Sudo password (check for an existing password)
+# - If exist, skips this part
+#------------------------------------------------------------------------------------
+
+if [[ "$(sudo passwd -S root 2>/dev/null | awk '{print $2}')" == "NP" ]]; then
+  print_info "Setting root password..."
+  printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
+else
+  print_info "Root already has a password — use this password to log in as root."
+fi
 
 # ------------------------------------------------------------------------------------
 # SSH configs:
@@ -94,5 +105,4 @@ sudo chmod 700 /root/change_name.sh
 sudo chown root:root /root/change_name.sh
 
 print_success "First installation complete!"
-echo "Now please disconnect and log in as root with the temperery password"
-echo "Then run: /root/change_name.sh"
+print_info "Now please disconnect and log in as root, and run the change_name script from the root home directory"
