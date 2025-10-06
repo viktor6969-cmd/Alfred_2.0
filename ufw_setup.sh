@@ -49,9 +49,9 @@ ufw default "$UFW_DEFAULT_OUTGOING" outgoing
 
 # Add IP to whitelist
 ufw allow from "$MASTER_IP"
-print_info "Added master IP to UFW whitelist"
+print_success "Added master IP to UFW whitelist"
 
-ufw enable
+yes | ufw enable
 
 # Set up UFW logging
 print_info "Setting up UFW logging..."
@@ -64,12 +64,12 @@ systemctl restart rsyslog
 
 
 #------------ Port knocking ------------#
-read -rp "Do you want to set a knocked service on the server? (y/N): " -n 1 reply
+read -rp "Do you want to set a knocked service on the server? (y/N): " reply
 echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
+if [[ $reply =~ ^[Yy]$ ]]; then
     apt install -y knockd
     for var in "${KNOCKED_PROFILE[@]}"; do
-        [ -n "${!var:-}" ] && { echo "${!var}" >> /etc/knockd.conf } || { echo "Error: $var is not set in .env file!"; exit 1; }
+        [ -n "${!var:-}" ] && { echo "${!var}" >> /etc/knockd.conf; } || { echo "Error: $var is not set in .env file!"; exit 1; }
     done
 else
     print_help "Skipping knocked instalaltion....."

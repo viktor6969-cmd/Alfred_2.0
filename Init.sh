@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-[ "${EUID:-$(id -u)}" -eq 0 ] || { print_error "Please run as root (sudo)."; exit 1; }
+[ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
 # Load environment variables
 if [ -f ./utils.sh ]; then
     # shellcheck disable=SC1091
@@ -20,6 +20,10 @@ else
     echo "utils.sh file not found!"
     exit 1
 fi
+echo "Please notice, that before running this script you should edit the .env file to your needs!"
+read -rp "Would you like to proceed? (y/N): " reply
+echo
+[[ ! $reply =~ $YES_REGEX ]] && { echo "Aborting as per user request."; exit 1; }
 
 # Load the .env file
 load_env
@@ -32,7 +36,7 @@ load_env
 # - Does it without asking if script runs in default mode 
 # ------------------------------------------------------------------------------------
 
-if [[ "${#MODULES[@]:-0}" -eq 0 ]]; then
+if [[ "${#MODULES[@]}" -eq 0 ]]; then
   print_error "MODULES array is empty or undefined."
   exit 1
 fi
@@ -52,15 +56,15 @@ if (( run )); then
 
 else 
     for module in "${MODULES[@]}"; do 
-        read -rp "Do you want to run the ${module} module? (y/N): " -n 1 reply
+        read -rp "Do you want to run the ${module} module? (y/N): " reply
         echo
-        if [[ $reply =~ $YES_REGEsX ]]; then
+        if [[ $reply =~ $YES_REGEX ]]; then
             print_info "Running ${module} setup..."
             if [ -f "$SCRIPT_DIR/${module}_setup.sh" ]; then
                 bash "$SCRIPT_DIR/${module}_setup.sh"
             else
                 print_error "Setup script for ${module} not found: $SCRIPT_DIR/${module}_setup.sh"
-            
+            fi
         else
             print_info "Skipping ${module}....."
         fi

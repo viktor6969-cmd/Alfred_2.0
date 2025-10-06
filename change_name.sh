@@ -23,6 +23,43 @@ fi
 
 load_env
 
+# ------------------------------------------------------------------------------------
+# Revert SSH from bootstrap:
+# - Remove temporary drop-in (root login + port settings)
+# - Install final drop-in with Port 42 and root login disabled
+# - Validate and reload SSH
+# ------------------------------------------------------------------------------------
+DROPIN="/etc/ssh/sshd_config.d/99-bootstrap.conf"
+
+print_info "Backing up /etc/ssh/sshd_config to .backups ..."
+backup_file "/etc/ssh/sshd_config"
+
+print_info "Restoring SSH to original settings..."
+if [ -f "$DROPIN" ]; then
+    sudo rm -f "$DROPIN"
+    print_info "Removed $DROPIN"
+fi
+
+# Create secure SSH configuration
+SECURE_DROPIN="/etc/ssh/sshd_config.d/99-secure.conf"
+print_info "Creating secure SSH configuration: $SECURE_DROPIN"
+printf '%s\n' "$SSH_SECURE_CONF" | sudo tee "$SECURE_DROPIN" >/dev/null
+print_success "Created secure SSH configuration: $SECURE_DROPIN"
+
+# Validate SSH config before reloading
+print_info "Validating sshd config..."
+if sudo sshd -t; then
+    print_info "Reloading SSH with current settings..."
+    if sudo systemctl is-active --quiet ssh; then
+        sudo systemctl reload ssh || sudo systemctl restart ssh
+    else
+        print_info "Starting SSH service..."
+        sudo systemctl start ssh && print_success "SSH configs updated successfully"
+    fi
+else
+    print_error "SSH config invalid. Aborting before reload."
+    exit 1
+fi
 
 # ------------------------------------------------------------------------------------
 # Rename the default user and migrate home:
@@ -75,43 +112,6 @@ while true; do
   fi
 done
 
-# ------------------------------------------------------------------------------------
-# Revert SSH from bootstrap:
-# - Remove temporary drop-in (root login + port settings)
-# - Install final drop-in with Port 42 and root login disabled
-# - Validate and reload SSH
-# ------------------------------------------------------------------------------------
-DROPIN="/etc/ssh/sshd_config.d/99-bootstrap.conf"
-
-print_info "Backing up /etc/ssh/sshd_config to .backups ..."
-backup_file "/etc/ssh/sshd_config"
-
-print_info "Restoring SSH to original settings..."
-if [ -f "$DROPIN" ]; then
-    sudo rm -f "$DROPIN"
-    print_info "Removed $DROPIN"
-fi
-
-# Create secure SSH configuration
-SECURE_DROPIN="/etc/ssh/sshd_config.d/99-secure.conf"
-print_info "Creating secure SSH configuration: $SECURE_DROPIN"
-printf '%s\n' "$SSH_SECURE_CONF" | sudo tee "$SECURE_DROPIN" >/dev/null
-print_success "Created secure SSH configuration: $SECURE_DROPIN"
-
-# Validate SSH config before reloading
-print_info "Validating sshd config..."
-if sudo sshd -t; then
-    print_info "Reloading SSH with current settings..."
-    if sudo systemctl is-active --quiet ssh; then
-        sudo systemctl reload ssh || sudo systemctl restart ssh
-    else
-        print_info "Starting SSH service..."
-        sudo systemctl start ssh && print_success "SSH configs updated successfully"
-    fi
-else
-    print_error "SSH config invalid. Aborting before reload."
-    exit 1
-fi
 
 
 

@@ -17,7 +17,7 @@ SSH_BOOTSTRAP_CONF='# BOOTSTRAP: temporary relaxed SSH for initial access.
 Port 42
 PermitRootLogin yes
 PasswordAuthentication yes
-EOF'
+'
 
 SSH_SECURE_CONF='# Secure SSH configuration
 Port 42
@@ -27,7 +27,7 @@ PasswordAuthentication no
 
 
 # UFW Configuration (for later use)
-UFW_DEFAULT_INCOMING="deny"
+UFW_DEFAULT_INCOMING="drop"
 UFW_DEFAULT_OUTGOING="allow"
 UFW_ALLOW_SERVICES="ssh"
 
@@ -82,4 +82,4 @@ KNOCKED_NGINX="
     stop_command = ufw delete allow from %IP% to any app Nginx"
 
 # Add your master IP address that should never be blocked
-MASTER_IP="Master ip"
+MASTER_IP="127.0.0.1"
