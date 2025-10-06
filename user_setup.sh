@@ -10,9 +10,11 @@
 # ==================================================================================
 
 set -euo pipefail
-    
+
+[ "${EUID:-$(id -u)}" -eq 0 ] || { print_error "Please run as root (sudo)."; exit 1; }
 # Load environment variables
 if [ -f ./utils.sh ]; then
+    # shellcheck disable=SC1091
     source ./utils.sh
 else
     echo "utils.sh file not found!"
@@ -22,9 +24,25 @@ fi
 # Load the .env file
 load_env
 
-# Set root password
-print_info "Setting root password..."
-printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
+
+#------------------------------------------------------------------------------------
+# Sudo password (check for an existing password)
+# - If exist, skips this part
+#------------------------------------------------------------------------------------
+
+root_status="$(sudo passwd -S root 2>/dev/null | awk '{print $2}')"
+
+if [[ "$root_status" == "P" ]]; then
+    print_info "Root already has a password — skipping."
+else
+    if [[ -z "${ROOT_PASSWORD:-}" ]]; then
+        print_error "ROOT_PASSWORD is empty or missing in .env. Aborting."
+        exit 1
+    fi
+    print_info "Setting new root password..."
+    printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
+    print_success "Root password set successfully."
+fi
 
 # ------------------------------------------------------------------------------------
 # SSH configs:
@@ -49,7 +67,7 @@ if [ -f "$DROPIN" ]; then
 fi
 
 # Backup sshd_config into local ./config.bkp
-print_info "Backing up /etc/ssh/sshd_config to .backups ..."
+print_info "Backing up /etc/ssh/sshd_config to .bkp ..."
 backup_file "/etc/ssh/sshd_config"
 
 # Modify the drop-in 
@@ -60,18 +78,20 @@ printf '%s\n' "$SSH_BOOTSTRAP_CONF" | sudo tee "$DROPIN" > /dev/null
 
 # Validate SSH config before reloading
 print_info "Validating sshd config..."
-if sudo sshd -t || { print_error "SSH config invalid. Aborting before reload."; exit 1; }; then
-    print_info "Reloading SSH with new settings..."
-    if sudo systemctl is-active --quiet ssh; then
-        sudo systemctl reload ssh || sudo systemctl restart ssh
-    else
-        print_info "Starting SSH service..."
-        sudo systemctl start ssh && print_success "SSH configuration updated successfully"
-    fi
-else
-    print_error "SSH configuration invalid. Aborting before reload."
-    exit 1
+if ! sudo sshd -t; then
+  print_error "SSH config invalid. Aborting before reload."
+  exit 1
 fi
+    
+print_info "Reloading SSH with new settings..."
+
+if sudo systemctl is-active --quiet ssh; then
+    sudo systemctl reload ssh || sudo systemctl restart ssh
+ else
+    print_info "Starting SSH service..."
+    sudo systemctl start ssh && print_success "SSH configuration updated successfully"
+fi
+
 
 
 # ------------------------------------------------------------------------------------
@@ -94,5 +114,4 @@ sudo chmod 700 /root/change_name.sh
 sudo chown root:root /root/change_name.sh
 
 print_success "First installation complete!"
-echo "Now please disconnect and log in as root with the temperery password"
-echo "Then run: /root/change_name.sh"
+print_info "Now please disconnect and log in as root, and run the change_name script from the root home directory"

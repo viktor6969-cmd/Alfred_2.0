@@ -1,0 +1,85 @@
+# User Configuration
+NEW_USERNAME="name"
+ROOT_PASSWORD="password"
+
+# Custom Prompt
+CUSTOM_PS1='\[\033[1;32m\]\u\[\033[0m\] \[\033[1;31m\]\w\[\033[0m\] \[\033[1;32m\]\$\[\033[0m\] '
+
+# Packages to Install (for later use)
+MODULES=("user" "ufw" "vpn" "nginx")
+
+# Packeges for installation 
+UFW_PACKAGES="ufw fail2ban unattended-upgrades knockd"
+
+# SSH Configuration
+SSH_BOOTSTRAP_CONF='# BOOTSTRAP: temporary relaxed SSH for initial access.
+# Your change_name.sh should remove or replace this file.
+Port 42
+PermitRootLogin yes
+PasswordAuthentication yes
+EOF'
+
+SSH_SECURE_CONF='# Secure SSH configuration
+Port 42
+PermitRootLogin no
+PasswordAuthentication no
+'
+
+
+# UFW Configuration (for later use)
+UFW_DEFAULT_INCOMING="deny"
+UFW_DEFAULT_OUTGOING="allow"
+UFW_ALLOW_SERVICES="ssh"
+
+# UFW profiles
+CUSTOME_UFW_PROFILES='[Nginx]
+title=Web Server
+description=NGINX web server ports
+ports=80/tcp,443/tcp,8080/tcp,8443/tcp
+
+[SSH-Custom]
+title=SSH Custom Port
+description=SSH on port 42 with fail2ban
+ports=42/tcp
+
+[VPN]
+title=WireGuard VPN
+description=WireGuard VPN ports
+ports=51820/udp,1194/udp
+'
+
+# Knonckd config file 
+KNOCKED_PROFILE=( "KNOCKED_OPTIONS" "KNOCKED_SSH" "KNOCKED_VPN" "KNOCKED_NGINX" )
+KNOCKED_OPTIONS="[options]
+    UseSyslog
+    LogFile = /var/log/knockd.log"
+
+KNOCKED_SSH="
+[openSSH]
+    sequence    = 7000,8000,9000
+    seq_timeout = 10
+    command     = ufw allow from %IP% to any app SSH-Custom
+    tcpflags    = syn
+    cmd_timeout = 300
+    stop_command = ufw delete allow from %IP% to any app SSH-Custom"
+
+KNOCKED_VPN="
+[openVPN]
+    sequence    = 1000,2000,3000
+    seq_timeout = 10
+    command     = ufw allow from %IP% to any app VPN
+    tcpflags    = syn
+    cmd_timeout = 300
+    stop_command = ufw delete allow from %IP% to any app VPN"
+
+KNOCKED_NGINX="
+[openNginx]
+    sequence    = 4000,5000,6000
+    seq_timeout = 10
+    command     = ufw allow from %IP% to any app Nginx
+    tcpflags    = syn
+    cmd_timeout = 300
+    stop_command = ufw delete allow from %IP% to any app Nginx"
+
+# Add your master IP address that should never be blocked
+MASTER_IP="Master ip"
