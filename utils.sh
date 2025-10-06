@@ -18,7 +18,7 @@ print_help() { printf "help\n"; }
 
 #=============== Global Vars ======================#
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BACKUP_DIR="$SCRIPT_DIR/.backups"
+BACKUP_DIR="$SCRIPT_DIR/.bkp"
 mkdir -p "$BACKUP_DIR"
 
 #=============== .env handling ====================#

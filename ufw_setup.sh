@@ -22,25 +22,22 @@ else
 fi
 load_env
 
-
-
 # Validate required environment variables
-required_vars=("PACKAGES" "NGINX_PORTS" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "UFW_ALLOW_SERVICES")
+required_vars=("UFW_PACKAGES" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "MASTER_IP" "CUSTOME_UFW_PROFILES")
 for var in "${required_vars[@]}"; do
   [ -n "${!var:-}" ] || { echo "Error: $var is not set in .env file!"; exit 1; }
 done
 
 #-------------- Packeges ---------------# 
-# Update and install packages
-echo "Updating package list and installing packages..."
-sudo apt-get update
-sudo apt install -y $PACKAGES
+# - Update and install packages
+apt-get update
+apt install -y $UFW_PACKAGES
+#---------------------------------------#
 
 
 #----------------- UFW -----------------#
 # - Set defaults (from .env)
-# - Allow SSH port from .env to avoid lockout
-# - Allow additional services/ports
+# - Allow master ip
 # - Enable UFW non-interactively
 
 print_info "Configuring UFW..."
@@ -49,36 +46,43 @@ print_info "Configuring UFW..."
 ufw default "$UFW_DEFAULT_INCOMING" incoming
 ufw default "$UFW_DEFAULT_OUTGOING" outgoing
 
-# Criete Profiles in /
-sudo ufw allow $UFW_ALLOW_SERVICES
-sudo ufw enable
 
 # Add IP to whitelist
 ufw allow from "$MASTER_IP"
-echo "Added master IP $MASTER_IP to UFW whitelist"
+print_info "Added master IP to UFW whitelist"
+
+ufw enable
 
 # Set up UFW logging
-echo "Setting up UFW logging..."
-sudo touch /var/log/ufw.log
+print_info "Setting up UFW logging..."
+touch /var/log/ufw.log
 echo -e "# Log kernel generated UFW log messages to file\n:msg,contains,\"[UFW \" /var/log/ufw.log\n& stop" | sudo tee -a /etc/rsyslog.d/20-ufw.conf > /dev/null
-sudo systemctl restart rsyslog
+systemctl restart rsyslog
 
-#----------------- SSH -----------------#
-echo "Configuring SSH security..."
+#---------------------------------------#
 
-# Backup original SSH config
-cp /etc/ssh/sshd_config /etc/ssh/sshd_config.backup
 
-# Hide SSH version banner
-sed -i 's/^#Banner none/Banner none/' /etc/ssh/sshd_config
-sed -i 's/^#DebianBanner no/DebianBanner no/' /etc/ssh/sshd_config
 
+#------------ Port knocking ------------#
+read -rp "Do you want to set a knocked service on the server? (y/N): " -n 1 reply
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    apt install -y knockd
+    for var in "${KNOCKED_PROFILE[@]}"; do
+        [ -n "${!var:-}" ] && { echo "${!var}" >> /etc/knockd.conf } || { echo "Error: $var is not set in .env file!"; exit 1; }
+    done
+else
+    print_help "Skipping knocked instalaltion....."
+fi
+
+
+#---------------------------------------#
 
 #------------- Auto updates ------------#
 # Configure automatic security updates
-echo "Configuring automatic security updates..."
+print_info "Configuring automatic security updates..."
 sudo apt install -y unattended-upgrades
 echo 'Unattended-Upgrade::Automatic-Reboot "true";' | sudo tee -a /etc/apt/apt.conf.d/50unattended-upgrades > /dev/null
 echo 'Unattended-Upgrade::Automatic-Reboot-Time "02:00";' | sudo tee -a /etc/apt/apt.conf.d/50unattended-upgrades > /dev/null
 
-echo "Package installation complete!"
+print_success "UFW setup complete!"

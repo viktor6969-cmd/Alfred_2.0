@@ -24,40 +24,47 @@ fi
 # Load the .env file
 load_env
 
-[[ "$1" == "-d" ]] && run=1 || run=0
+# If the script run via -d flag, set the run to 1
+[[ "${1:-}" == "-d" ]] && run=1 || run=0
 
 # ------------------------------------------------------------------------------------
-# User initiation runs user_setup.sh:
-# - Ask the user if he want to change the default ubuntu user
+# A loop going thrue all the modules in .env file, and running them depends on the usre input:
 # - Does it without asking if script runs in default mode 
 # ------------------------------------------------------------------------------------
 
+if [[ "${#MODULES[@]:-0}" -eq 0 ]]; then
+  print_error "MODULES array is empty or undefined."
+  exit 1
+fi
+
 if (( run )); then 
-    sudo $SCRIPT_DIR/user_setup.sh 
+    # Default mode - install all modules without asking
+    print_info "Installing all modules automatically..."
+    
+    for module in "${MODULES[@]}"; do 
+        print_info "Running ${module} setup..."
+        if [ -f "$SCRIPT_DIR/${module}_setup.sh" ]; then
+            bash "$SCRIPT_DIR/${module}_setup.sh"
+        else
+            print_error "Setup script for ${module} not found: $SCRIPT_DIR/${module}_setup.sh"
+        fi
+    done 
 
 else 
-    read -rp "Do you want to change the default ubuntu user to $NEW_USERNAME? (y/N): " -n 1
-    echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_info "Runing user setup..."
-            sudo $SCRIPT_DIR/user_setup.sh 
-        
+    for module in "${MODULES[@]}"; do 
+        read -rp "Do you want to run the ${module} module? (y/N): " -n 1 reply
+        echo
+        if [[ $reply =~ $YES_REGEsX ]]; then
+            print_info "Running ${module} setup..."
+            if [ -f "$SCRIPT_DIR/${module}_setup.sh" ]; then
+                bash "$SCRIPT_DIR/${module}_setup.sh"
+            else
+                print_error "Setup script for ${module} not found: $SCRIPT_DIR/${module}_setup.sh"
+            
         else
-            print_help "Skipping....."
-    fi
+            print_info "Skipping ${module}....."
+        fi
+    done
 fi
 
-# ------------------------------------------------------------------------------------
-# Main setup:
-# - Ask the user if he wants to set the server rules from the .env file 
-# - Does it without asking if script runs in default mode 
-# ------------------------------------------------------------------------------------
-
-
-if (( run )); then 
-    print_info "Runing user setup..."
-    sudo $SCRIPT_DIR/user_setup.sh 
-else
-    read -rp "Do you want to set the UFW rules from the .env file? (y/N): " -n 1
-    echo
-fi
+print_success "Installation complite!"

@@ -26,15 +26,19 @@ load_env
 
 # ------------------------------------------------------------------------------------
 # Rename the default user and migrate home:
+# - Check that ubuntu exist, and the username from .env file don't
 # - Rename 'ubuntu' to $NEW_USERNAME
 # - Move home to /home/$NEW_USERNAME
 # - Rename primary group to $NEW_USERNAME
 # - Fix ownership
 # ------------------------------------------------------------------------------------
 
-# Change user name and home dir
+id ubuntu >/dev/null 2>&1 || { print_error "User 'ubuntu' not found."; exit 1; }
+id -u "$NEW_USERNAME" >/dev/null 2>&1 && { print_error "User '$NEW_USERNAME' already exists."; exit 1; }
+getent group "$NEW_USERNAME" >/dev/null && { print_error "Group '$NEW_USERNAME' already exists."; exit 1; }
+
 print_info "Changing username from 'ubuntu' to '$NEW_USERNAME'..."
-usermod -l "$NEW_USERNAME" ubuntu
+usermod -l "$NEW_USERNAME" ubuntu || { print_error "usermod rename failed."; exit 1; }
 usermod -d "/home/$NEW_USERNAME" -m "$NEW_USERNAME"
 groupmod -n "$NEW_USERNAME" ubuntu
 
@@ -45,6 +49,31 @@ chown -R "$NEW_USERNAME:$NEW_USERNAME" "/home/$NEW_USERNAME"
 # Set custom prompt
 print_info "Applying custom prompt to $NEW_USERNAME ..."
 printf "PS1='%s'\n" "$CUSTOM_PS1" >> "/home/$NEW_USERNAME/.bashrc"
+
+# ------------------------------------------------------------------------------------
+# Set a new root password (interactive, with confirmation)
+# ------------------------------------------------------------------------------------
+print_info "Setting a new root password..."
+while true; do
+  printf "Please enter new root password: "
+  read -r -s password1
+  echo
+  printf "Please confirm new root password: "
+  read -r -s password2
+  echo
+
+  if [ "$password1" != "$password2" ]; then
+    print_error "Passwords do not match. Try again."
+    continue
+  fi
+
+  if printf 'root:%s\n' "$password1" | chpasswd; then
+    print_success "Root password successfully changed."
+    break
+  else
+    print_error "Failed to set password. Please try again."
+  fi
+done
 
 # ------------------------------------------------------------------------------------
 # Revert SSH from bootstrap:
@@ -85,30 +114,6 @@ else
 fi
 
 
-# ------------------------------------------------------------------------------------
-# Set a new root password (interactive, with confirmation)
-# ------------------------------------------------------------------------------------
-print_info "Setting a new root password..."
-while true; do
-  printf "Please enter new root password: "
-  read -r -s password1
-  echo
-  printf "Please confirm new root password: "
-  read -r -s password2
-  echo
-
-  if [ "$password1" != "$password2" ]; then
-    print_error "Passwords do not match. Try again."
-    continue
-  fi
-
-  if printf 'root:%s\n' "$password1" | chpasswd; then
-    print_success "Root password successfully changed."
-    break
-  else
-    print_error "Failed to set password. Please try again."
-  fi
-done
 
 # ------------------------------------------------------------------------------------
 # Cleanup
