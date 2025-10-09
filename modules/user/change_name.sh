@@ -38,7 +38,7 @@ id -u "$NEW_USERNAME" >/dev/null 2>&1 && { print_error "User '$NEW_USERNAME' alr
 getent group "$NEW_USERNAME" >/dev/null && { print_error "Group '$NEW_USERNAME' already exists."; exit 1; }
 
 print_info "Changing username from 'ubuntu' to '$NEW_USERNAME'..."
-usermod -l "$NEW_USERNAME" ubuntu || { print_error "usermod rename failed."; exit 1; }
+usermod -l "$NEW_USERNAME" ubuntu || { print_error "usermod rename failed."; exit 1; } 
 usermod -d "/home/$NEW_USERNAME" -m "$NEW_USERNAME"
 groupmod -n "$NEW_USERNAME" ubuntu
 
