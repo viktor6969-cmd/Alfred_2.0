@@ -14,15 +14,29 @@ print_error()   { printf "%b%s\n" "$ERROR"   "$*"; }
 # Utility function to print success messages
 print_success() { printf "%b%s\n" "$SUCCESS" "$*"; }
 
-print_help() { printf "help\n"; }
+print_help() {
+  cat <<'EOF'
+Usage: ./server_auto.sh [-u|-y|-l|-i <module>|-h]
+  -u            run only the user module
+  -y            install all modules (except user) without prompts
+  -l            list available modules
+  -i <module>   show module description and requirements
+  -h            show this help
+  (no args)     interactive; runs ufw if not installed, then asks per module
+EOF
+}
 
 #=============== Global Vars ======================#
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="$SCRIPT_DIR/config"
+# ROOT_DIR -> project root; UTILS_DIR -> utils folder
+UTILS_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
+UTILS_DIR="$(cd "$(dirname "$UTILS_REAL")" && pwd)"
+ROOT_DIR="$(cd "$UTILS_DIR/.." && pwd)"
+
+CONFIG_DIR="$ROOT_DIR/config"
 ENV_FILE="$CONFIG_DIR/.env"
 ENV_TEMPLATE="$CONFIG_DIR/change_me.env"
 
-BACKUP_DIR="$SCRIPT_DIR/.bkp"
+BACKUP_DIR="$ROOT_DIR/.bkp"
 mkdir -p "$BACKUP_DIR"
 
 #=============== .env handling ====================#
@@ -44,28 +58,29 @@ ensure_env() {
   chown root:root "$ENV_FILE" 2>/dev/null || true
 }
 
+# Load .env with basic hardening
 load_env() {
   ensure_env
-  ensure_env_security()
+  ensure_env_security
   # shellcheck disable=SC1090
   source "$ENV_FILE"
 }
 
 # Basic security hardening for .env
 ensure_env_security() {
-  if [[ -e "$ENV_FILE" ]]; then
-    if [[ $(id -u) -eq 0 ]]; then
-      chown root:root "$ENV_FILE" 2>/dev/null || true
-      chmod 600 "$ENV_FILE" 2>/dev/null || true
-    fi
+  if [[ -e "$ENV_FILE" ]] && [[ $(id -u) -eq 0 ]]; then
+    chown root:root "$ENV_FILE" 2>/dev/null || true
+    chmod 600 "$ENV_FILE" 2>/dev/null || true
   fi
 }
 
 #=============== Module handling ====================#
-MODULES_DIR="$SCRIPT_DIR/modules"
+MODULES_DIR="$ROOT_DIR/modules"
 
+# check install stamp
 is_installed() { [[ -f "$MODULES_DIR/$1/.installed.stamp" ]]; }
 
+# mark install stamp
 mark_installed() {
   local m="$1" v ts
   v="$(cat "$MODULES_DIR/$m/version.txt" 2>/dev/null || echo unknown)"
@@ -75,12 +90,12 @@ mark_installed() {
   mv "$MODULES_DIR/$m/.installed.stamp.tmp" "$MODULES_DIR/$m/.installed.stamp"
 }
 
+# clear install stamp
 clear_installed() { rm -f "$MODULES_DIR/$1/.installed.stamp"; }
 
 
-
 #=============== Backups ==========================#
-# Put all backups into .backups
+# Put all backups into .bkp
 backup_file() {
   # usage: backup_file /etc/ssh/sshd_config
   local src="$1"
@@ -94,4 +109,3 @@ backup_file() {
   cp "$src" "$BACKUP_DIR/$base.$stamp"
   print_success "Backed up $src -> $BACKUP_DIR/$base.$stamp"
 }
-

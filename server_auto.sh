@@ -69,24 +69,46 @@ run_module() {
   valid_module "$m" || { print_error "Invalid module name: $m"; exit 1; }
   module_exists "$m" || { print_error "Missing setup.sh for $m"; exit 1; }
 
-  # Resolve requirements first
+  # Already installed -> ask to reinstall
+  if is_installed "$m"; then
+    read -rp "$m is already installed. Reinstall? (y/N): " ans; echo
+    if [[ $ans =~ $YES_REGEX ]]; then
+      print_info "Reinstalling $m..."
+      rm -f "$MODULES_DIR/$m/.installed.stamp" 2>/dev/null || true
+    else
+      print_info "Skipping reinstall of $m."
+      return 0
+    fi
+  fi
+
+  # Resolve requirements (only for new/reinstall)
   local dep
   while read -r dep; do
     [[ -z "$dep" ]] && continue
     [[ "$dep" == "user" ]] && { print_error "user cannot be a dependency"; exit 1; }
-    run_module "$dep"
+    if ! is_installed "$dep"; then
+      print_info "Dependency '$dep' is not installed for module '$m'."
+      read -rp "Do you want to install '$dep' now? (y/N): " ans; echo
+      if [[ $ans =~ $YES_REGEX ]]; then
+        run_module "$dep"
+      else
+        print_error "Cannot continue installing '$m' without '$dep'. Aborting."
+        exit 1
+      fi
+    fi
   done < <(module_reqs "$m" || true)
-
-  # Skip if already installed
-  if is_installed "$m"; then
-    print_info "$m already installed, skipping..."
-    return 0
-  fi
 
   print_info "Installing $m..."
   bash "$MODULES_DIR/$m/setup.sh"
-  mark_installed "$m"
-  print_success "$m installed successfully."
+  exit_code=$?
+  if (( exit_code == 0 )); then
+    mark_installed "$m"
+    print_success "$m installed successfully."
+  else
+    print_error "$m failed with exit code $exit_code."
+    print_error "Module NOT marked as installed. Fix errors and rerun."
+    exit "$exit_code"
+  fi
 }
 
 
@@ -131,52 +153,24 @@ case "$ARG1" in
     ;;
 
   -u)
-    # Run only user module (if not installed)
-    if is_installed "user"; then
-      print_info "User module already installed. Nothing to do."
-      exit 0
-    fi
+    # Run only user module via the shared handler
     print_info "Running user module..."
-    bash "$MODULES_DIR/user/setup.sh"
-    mark_installed "user"
+    run_module "user"
     exit 0
     ;;
 
   -r)
     mod="${2:-}"
     [[ -z "$mod" ]] && { print_error "Usage: $0 -r <module>"; exit 1; }
-    valid_module "$mod" || { print_error "Invalid module name: $mod"; exit 1; }
-    module_exists "$mod" || { print_error "Module '$mod' not found"; exit 1; }
-
-    if is_installed "$mod"; then
-      read -rp "$mod is already installed. Reinstall? (y/N): " ans
-      echo
-      if [[ $ans =~ $YES_REGEX ]]; then
-        print_info "Reinstalling $mod..."
-        rm -f "$MODULES_DIR/$mod/.installed.stamp" 2>/dev/null || true
-        bash "$MODULES_DIR/$mod/setup.sh"
-        mark_installed "$mod"
-        print_success "$mod reinstalled successfully."
-      else
-        print_info "Skipping reinstall of $mod."
-      fi
-    else
-      print_info "Installing $mod..."
-      bash "$MODULES_DIR/$mod/setup.sh"
-      mark_installed "$mod"
-      print_success "$mod installed successfully."
-    fi
+    run_module "$mod"    
     exit 0
     ;;
 
   -y)
     print_info "Running full auto installation (-y mode)..."
     # Always start with UFW if not installed
-    if ! is_installed "ufw"; then
-      run_module "ufw"
-    else
-      print_info "UFW already installed — skipping."
-    fi
+    run_module "ufw"
+
     for m in $(discover_modules); do
       [[ "$m" == "ufw" || "$m" == "user" ]] && continue
       run_module "$m"
@@ -188,11 +182,7 @@ case "$ARG1" in
   "")
     print_info "Interactive mode. (Press Enter for default 'no')"
     # Run UFW first if missing
-    if ! is_installed "ufw"; then
-      run_module "ufw"
-    else
-      print_info "UFW already installed — skipping."
-    fi
+    run_module "ufw"
 
     for m in $(discover_modules); do
       [[ "$m" == "ufw" || "$m" == "user" ]] && continue

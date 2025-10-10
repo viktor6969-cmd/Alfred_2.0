@@ -1,117 +1,164 @@
 #!/usr/bin/env bash
 
+
 # ==================================================================================
-# INIT (bootstrap) script
+# USER MODULE — bootstrap for user rename and temporary SSH relaxation
 # ==================================================================================
-# Expectations from you:
-# - Run this from the project directory (same dir as .env and change_name.sh)
-# - Run via: sudo bash ./init.sh   (or equivalent)
-# - After it finishes, reconnect as root and run /root/change_name.sh
+# Expectations:
+# - Run ONLY via server_auto.sh with -u mode (isolated user flow)
+# - Loads config from config/.env (via utils.sh)
+# - This script:
+#     1) Ensures root has a password (if missing/locked)
+#     2) Installs a temporary SSH drop-in from $SSH_BOOTSTRAP_CONF (port 42, root/pass)
+#     3) Validates & reloads SSH
+#     4) Stages /root/change_name.sh for phase 2
 # ==================================================================================
 
-set -euo pipefail
+# ----------------------------------------------------------------------------------
+# Locate project root and utils
+# ----------------------------------------------------------------------------------
+SCRIPT_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
+MODULE_DIR="$(cd "$(dirname "$SCRIPT_REAL")" && pwd)"
+ROOT_DIR="$(cd "$MODULE_DIR/../.." && pwd)"
+UTILS_DIR="$ROOT_DIR/utils"
 
-[ "${EUID:-$(id -u)}" -eq 0 ] || { print_error "Please run as root (sudo)."; exit 1; }
-# Load environment variables
-if [ -f ./utils.sh ]; then
-    # shellcheck disable=SC1091
-    source ./utils.sh
+[ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
+
+if [[ -f "$UTILS_DIR/utils.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "$UTILS_DIR/utils.sh"
 else
-    echo "utils.sh file not found!"
-    exit 1
+  echo "utils.sh not found at $UTILS_DIR/utils.sh" >&2
+  exit 1
 fi
 
-# Load the .env file
 load_env
 
-
-#------------------------------------------------------------------------------------
-# Sudo password (check for an existing password)
-# - If exist, skips this part
-#------------------------------------------------------------------------------------
-
+# ----------------------------------------------------------------------------------
+# Root password setup:
+# - If root already has a password (status P) => skip
+# - Else: offer to use $ROOT_PASSWORD from .env (if present), or prompt securely
+# ----------------------------------------------------------------------------------
 root_status="$(sudo passwd -S root 2>/dev/null | awk '{print $2}')"
+if [[ -z "${root_status:-}" ]]; then
+  print_error "Unable to determine root password status (passwd -S). Aborting."
+  exit 1
+fi
 
 if [[ "$root_status" == "P" ]]; then
-    print_info "Root already has a password — skipping."
+  print_info "Root already has a password — skipping."
 else
-    if [[ -z "${ROOT_PASSWORD:-}" ]]; then
-        print_error "ROOT_PASSWORD is empty or missing in .env. Aborting."
-        exit 1
-    fi
-    print_info "Setting new root password..."
-    printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
-    print_success "Root password set successfully."
-fi
-
-# ------------------------------------------------------------------------------------
-# SSH configs:
-# - Back up curent settings (if not done yet)
-# - Make a temp ssh config file
-# - Allows root access via password 
-# - Changes the ssh port to 42 
-# ------------------------------------------------------------------------------------
-
-# Check if drop-in already exists with different content
-DROPIN="/etc/ssh/sshd_config.d/99-bootstrap.conf"
-if [ -f "$DROPIN" ]; then
-    if ! grep -q "BOOTSTRAP: temporary relaxed SSH" "$DROPIN"; then
-        print_error "Warning: $DROPIN exists but doesn't appear to be from this script."
-        read -p "Overwrite? (y/N): " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            print_error "Aborting."
-            exit 1
+  # Either use $ROOT_PASSWORD from .env (if set) or interactively prompt
+  if [[ -n "${ROOT_PASSWORD:-}" ]]; then
+    read -rp "Use default root password from .env? (y/N): " ans; echo
+    # Set the password from .env
+    if [[ $ans =~ $YES_REGEX ]]; then
+      if printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd; then
+        print_success "Root password set from .env."
+      else
+        print_error "Failed to set root password from .env."; exit 1
+      fi
+    else
+      # Set the password interactively
+      print_info "Entering interactive password setup..."
+      while true; do
+        read -srp "Enter new root password: " _pw1; echo
+        read -srp "Confirm new root password: " _pw2; echo
+        if [[ -z "$_pw1" || -z "$_pw2" ]]; then
+          print_error "Password cannot be empty."; continue
         fi
+        if [[ "$_pw1" != "$_pw2" ]]; then
+          print_error "Passwords do not match, try again"; continue
+        fi
+        if printf 'root:%s\n' "$_pw1" | sudo chpasswd; then
+          print_success "Root password set."
+          unset _pw1 _pw2
+          break
+        else
+          print_error "Failed to set root password. Try again."
+        fi
+      done
     fi
+  else
+    # No default in .env — must prompt
+    print_info "No default root password in .env — entering interactive setup..."
+    while true; do
+      read -srp "Enter new root password: " _pw1; echo
+      read -srp "Confirm new root password: " _pw2; echo
+      if [[ -z "$_pw1" || -z "$_pw2" ]]; then
+        print_error "Password cannot be empty."; continue
+      fi
+      if [[ "$_pw1" != "$_pw2" ]]; then
+        print_error "Passwords do not match."; continue
+      fi
+      if printf 'root:%s\n' "$_pw1" | sudo chpasswd; then
+        print_success "Root password set."
+        unset _pw1 _pw2
+        break
+      else
+        print_error "Failed to set root password. Try again."
+      fi
+    done
+  fi
 fi
 
-# Backup sshd_config into local ./config.bkp
+
+
+# ----------------------------------------------------------------------------------
+# SSH bootstrap drop-in:
+# - Backup current sshd_config
+# - Write /etc/ssh/sshd_config.d/99-bootstrap.conf from $SSH_BOOTSTRAP_CONF
+# - Validate and reload sshd
+# ----------------------------------------------------------------------------------
+DROPIN="/etc/ssh/sshd_config.d/99-bootstrap.conf"
+
 print_info "Backing up /etc/ssh/sshd_config to .bkp ..."
 backup_file "/etc/ssh/sshd_config"
 
-# Modify the drop-in 
-print_info "Writing SSH drop-in: $DROPIN"
+print_info "Writing SSH bootstrap drop-in: $DROPIN"
 sudo mkdir -p /etc/ssh/sshd_config.d
-printf '%s\n' "$SSH_BOOTSTRAP_CONF" | sudo tee "$DROPIN" > /dev/null
 
+# Sanity: refuse accidental here-doc markers inside the env content
+if grep -qE '(^|\n)EOF(\n|$)' <<<"${SSH_BOOTSTRAP_CONF:-}"; then
+  print_error "SSH_BOOTSTRAP_CONF contains a stray EOF marker. Fix .env and rerun."
+  exit 1
+fi
 
-# Validate SSH config before reloading
+if [[ -z "${SSH_BOOTSTRAP_CONF:-}" ]]; then
+  print_error "SSH_BOOTSTRAP_CONF is empty in .env — cannot proceed."
+  exit 1
+fi
+
+printf '%s\n' "$SSH_BOOTSTRAP_CONF" | sudo tee "$DROPIN" >/dev/null
+
 print_info "Validating sshd config..."
 if ! sudo sshd -t; then
   print_error "SSH config invalid. Aborting before reload."
   exit 1
 fi
-    
-print_info "Reloading SSH with new settings..."
 
+print_info "Reloading SSH with bootstrap settings..."
 if sudo systemctl is-active --quiet ssh; then
-    sudo systemctl reload ssh || sudo systemctl restart ssh
- else
-    print_info "Starting SSH service..."
-    sudo systemctl start ssh && print_success "SSH configuration updated successfully"
+  sudo systemctl reload ssh || sudo systemctl restart ssh
+else
+  print_info "Starting SSH service..."
+  sudo systemctl start ssh
+fi
+print_success "SSH bootstrap applied."
+
+# ----------------------------------------------------------------------------------
+# Stage rename tool:
+# - Install modules/user/change_name.sh into /root/change_name.sh (700, root:root)
+# ----------------------------------------------------------------------------------
+SRC_CHANGE="$MODULE_DIR/change_name.sh"
+DST_CHANGE="/root/change_name.sh"
+
+if [[ ! -f "$SRC_CHANGE" ]]; then
+  print_error "change_name.sh not found in $MODULE_DIR"
+  exit 1
 fi
 
-
-
-# ------------------------------------------------------------------------------------
-# Add the change_name.sh script:
-# - Make a soft link to the change_name.sh script in root dir (if not already exist)
-# - Changes the permissions so it cna be run
-# ------------------------------------------------------------------------------------
-
-
-# Create the samilink for change_name.sh in the root dir
-print_info "Creating /root/change_name.sh (symlink to project file)..."
-if [ ! -f ./change_name.sh ]; then
-    print_error "ERROR: ./change_name.sh not found in current directory."
-    exit 1
-fi
-
-# Make executable
-sudo ln -sf "$(pwd)/change_name.sh" /root/change_name.sh
-sudo chmod 700 /root/change_name.sh
-sudo chown root:root /root/change_name.sh
-
-print_success "First installation complete!"
-print_info "Now please disconnect and log in as root, and run the change_name script from the root home directory"
+print_info "Staging $DST_CHANGE ..."
+install -m 700 -o root -g root "$SRC_CHANGE" "$DST_CHANGE"
+print_success "Ready: run /root/change_name.sh after reconnecting as root (port 42)."
+print_success "User module bootstrap complete. Reconnect as root on port 42 and run: /root/change_name.sh"

@@ -36,6 +36,33 @@ fi
 
 load_env
 
+# ----------------------------------------------------------------------------------
+# Root password setup:
+# - If root already has a password (status P) => skip
+# - Else require non-empty $ROOT_PASSWORD from .env and set it
+# ----------------------------------------------------------------------------------
+root_status="$(sudo passwd -S root 2>/dev/null | awk '{print $2}')"
+if [[ -z "${root_status:-}" ]]; then
+  print_error "Unable to determine root password status (passwd -S). Aborting."
+  exit 1
+fi
+
+if [[ "$root_status" == "P" ]]; then
+  print_info "Root already has a password — skipping."
+else
+  if [[ -z "${ROOT_PASSWORD:-}" ]]; then
+    print_error "Default root password is empty or missing in the .env file, please update the file and run the script again."
+    exit 1
+  fi
+  print_info "Setting new root password..."
+  printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
+  print_success "Default root password set."
+fi
+
+
+
+
+
 
 # Validate required environment variables
 required_vars=("UFW_PACKAGES" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "MASTER_IP" "CUSTOME_UFW_PROFILES")
