@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-
-#!/usr/bin/env bash
 set -euo pipefail
 
 # ==================================================================================
-# USER MODULE — bootstrap for user rename and temporary SSH relaxation
+# UFW MODULE — baseline firewall configuration
 # ==================================================================================
 # Expectations:
-# - Run ONLY via server_auto.sh with -u mode (isolated user flow)
+# - Self-contained module called by server_auto.sh
 # - Loads config from config/.env (via utils.sh)
 # - This script:
-#     1) Ensures root has a password (if missing/locked)
-#     2) Installs a temporary SSH drop-in from $SSH_BOOTSTRAP_CONF (port 42, root/pass)
-#     3) Validates & reloads SSH
-#     4) Stages /root/change_name.sh for phase 2
+#     1) Installs UFW + required packages
+#     2) Applies default policies and master IP allow-list
+#     3) Loads custom UFW profiles from .env (optional)
+#     4) Enables UFW non-interactively and configures logging
+#     5) (Optional) Configures knockd if requested
+#     6) (Optional) Enables unattended-upgrades
 # ==================================================================================
 
 # ----------------------------------------------------------------------------------
@@ -37,94 +37,133 @@ fi
 load_env
 
 # ----------------------------------------------------------------------------------
-# Root password setup:
-# - If root already has a password (status P) => skip
-# - Else require non-empty $ROOT_PASSWORD from .env and set it
+# Validate required environment variables (keep names as in your .env)
 # ----------------------------------------------------------------------------------
-root_status="$(sudo passwd -S root 2>/dev/null | awk '{print $2}')"
-if [[ -z "${root_status:-}" ]]; then
-  print_error "Unable to determine root password status (passwd -S). Aborting."
-  exit 1
-fi
-
-if [[ "$root_status" == "P" ]]; then
-  print_info "Root already has a password — skipping."
-else
-  if [[ -z "${ROOT_PASSWORD:-}" ]]; then
-    print_error "Default root password is empty or missing in the .env file, please update the file and run the script again."
-    exit 1
-  fi
-  print_info "Setting new root password..."
-  printf 'root:%s\n' "$ROOT_PASSWORD" | sudo chpasswd
-  print_success "Default root password set."
-fi
-
-
-
-
-
-
-# Validate required environment variables
-required_vars=("UFW_PACKAGES" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "MASTER_IP" "CUSTOME_UFW_PROFILES")
+required_vars=("UFW_PACKAGES" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "MASTER_IP")
 for var in "${required_vars[@]}"; do
-  [ -n "${!var:-}" ] || { echo "Error: $var is not set in .env file!"; exit 1; }
+  [[ -n "${!var:-}" ]] || { print_error "Missing required var in .env: $var"; exit 1; }
 done
 
-#-------------- Packeges ---------------# 
-# - Update and install packages
-apt-get update
-apt install -y $UFW_PACKAGES
-#---------------------------------------#
+# ----------------------------------------------------------------------------------
+# Install packages
+# ----------------------------------------------------------------------------------
+print_info "The following packages will be installed: ${UFW_PACKAGES}"
+read -rp "Do you want to proceed with installation? (y/N): " ans; echo
+if [[ $ans =~ $YES_REGEX ]]; then
+  print_info "Updating apt cache..."
+  apt-get update -y
 
-
-#----------------- UFW -----------------#
-# - Set defaults (from .env)
-# - Allow master ip
-# - Enable UFW non-interactively
-
-print_info "Configuring UFW..."
-
-# Default policies
-ufw default "$UFW_DEFAULT_INCOMING" incoming
-ufw default "$UFW_DEFAULT_OUTGOING" outgoing
-
-
-# Add IP to whitelist
-ufw allow from "$MASTER_IP"
-print_info "Added master IP to UFW whitelist"
-
-ufw enable
-
-# Set up UFW logging
-print_info "Setting up UFW logging..."
-touch /var/log/ufw.log
-echo -e "# Log kernel generated UFW log messages to file\n:msg,contains,\"[UFW \" /var/log/ufw.log\n& stop" | sudo tee -a /etc/rsyslog.d/20-ufw.conf > /dev/null
-systemctl restart rsyslog
-
-#---------------------------------------#
-
-
-
-#------------ Port knocking ------------#
-read -rp "Do you want to set a knocked service on the server? (y/N): " -n 1 reply
-echo
-if [[ $REPLY =~ ^[Yy]$ ]]; then
-    apt install -y knockd
-    for var in "${KNOCKED_PROFILE[@]}"; do
-        [ -n "${!var:-}" ] && { echo "${!var}" >> /etc/knockd.conf } || { echo "Error: $var is not set in .env file!"; exit 1; }
-    done
+  print_info "Installing packages..."
+  apt-get install -y ${UFW_PACKAGES}
+  print_success "Packages installed successfully."
 else
-    print_help "Skipping knocked instalaltion....."
+  print_info "Skipping package installation as per user choice."
 fi
 
 
-#---------------------------------------#
+# ----------------------------------------------------------------------------------
+# Configure UFW defaults and master IP
+# ----------------------------------------------------------------------------------
+print_info "Configuring UFW default policies..."
+ufw --force reset >/dev/null 2>&1 || true   # start clean, ignore if first run
+ufw default "${UFW_DEFAULT_INCOMING}" incoming
+ufw default "${UFW_DEFAULT_OUTGOING}" outgoing
 
-#------------- Auto updates ------------#
-# Configure automatic security updates
-print_info "Configuring automatic security updates..."
-sudo apt install -y unattended-upgrades
-echo 'Unattended-Upgrade::Automatic-Reboot "true";' | sudo tee -a /etc/apt/apt.conf.d/50unattended-upgrades > /dev/null
-echo 'Unattended-Upgrade::Automatic-Reboot-Time "02:00";' | sudo tee -a /etc/apt/apt.conf.d/50unattended-upgrades > /dev/null
+print_info "Whitelisting master IP: ${MASTER_IP}"
+ufw allow from "${MASTER_IP}"
 
-print_success "UFW setup complete!"
+# ----------------------------------------------------------------------------------
+# Add custom UFW application profiles (optional)
+# ----------------------------------------------------------------------------------
+apps_dir="/etc/ufw/applications.d"
+custom_file="${apps_dir}/custom-profiles.conf"
+mkdir -p "$apps_dir"
+
+added_profiles=0
+if declare -p CUSTOM_UFW_PROFILES >/dev/null 2>&1; then
+  print_info "Adding custom UFW profiles from .env variables (CUSTOM_UFW_PROFILES)..."
+  : > "$custom_file.tmp" # Empty the temp file 
+  for varname in "${CUSTOM_UFW_PROFILES[@]}"; do 
+    if [[ -n "${!varname:-}" ]]; then
+      printf '%s\n' "${!varname}" >> "$custom_file.tmp"
+      added_profiles=1
+    else
+      print_error "Variable '$varname' listed in CUSTOM_UFW_PROFILES is empty or missing."
+      exit 1
+    fi
+  done
+  if (( added_profiles )); then
+    mv -f "$custom_file.tmp" "$custom_file"
+    print_success "Custom profiles written to: $custom_file"
+  else
+    rm -f "$custom_file.tmp" 2>/dev/null || true
+  fi
+elif [[ -n "${CUSTOM_UFW_PROFILE_TEXT:-}" ]]; then
+  print_info "Adding custom UFW profiles from CUSTOM_UFW_PROFILE_TEXT..."
+  printf '%s\n' "$CUSTOM_UFW_PROFILE_TEXT" > "$custom_file"
+  print_success "Custom profiles written to: $custom_file"
+else
+  print_info "No custom UFW profiles defined; skipping."
+fi
+
+# ----------------------------------------------------------------------------------
+# Enable UFW and configure logging
+# ----------------------------------------------------------------------------------
+print_info "Enabling UFW (non-interactive)..."
+ufw --force enable
+
+print_info "Configuring UFW logging via rsyslog..."
+# Create/replace config to send UFW kernel messages to /var/log/ufw.log
+rsys_conf="/etc/rsyslog.d/20-ufw.conf"
+cat > "$rsys_conf" <<'RSYS'
+# Log kernel-generated UFW messages to a dedicated file
+:msg, contains, "[UFW " /var/log/ufw.log
+& stop
+RSYS
+systemctl restart rsyslog
+
+# ----------------------------------------------------------------------------------
+# Optional: Port knocking (knockd)
+# ----------------------------------------------------------------------------------
+# .env options supported:
+#   * KNOCKED_PROFILE : array of variable NAMES whose values are appended to /etc/knockd.conf
+#   * KNOCKD_CONF_TEXT: literal multi-line text to write into /etc/knockd.conf
+read -rp "Do you want to configure knockd (port knocking)? (y/N): " ans; echo
+if [[ $ans =~ $YES_REGEX ]]; then
+  print_info "Installing knockd..."
+  apt-get install -y knockd
+  conf="/etc/knockd.conf"
+  if declare -p KNOCKED_PROFILE >/dev/null 2>&1; then
+    print_info "Writing knockd profiles from KNOCKED_PROFILE..."
+    : > "$conf.tmp"
+    for varname in "${KNOCKED_PROFILE[@]}"; do
+      [[ -n "${!varname:-}" ]] || { print_error "Variable '$varname' is empty or missing."; exit 1; }
+      printf '%s\n' "${!varname}" >> "$conf.tmp"
+    done
+    mv -f "$conf.tmp" "$conf"
+  elif [[ -n "${KNOCKD_CONF_TEXT:-}" ]]; then
+    print_info "Writing knockd config from KNOCKD_CONF_TEXT..."
+    printf '%s\n' "$KNOCKD_CONF_TEXT" > "$conf"
+  else
+    print_error "No knockd configuration provided in .env (KNOCKED_PROFILE or KNOCKD_CONF_TEXT)."
+    exit 1
+  fi
+  systemctl enable knockd >/dev/null 2>&1 || true
+  systemctl restart knockd
+  print_success "knockd configured."
+else
+  print_info "Skipping knockd configuration."
+fi
+
+# ----------------------------------------------------------------------------------
+# Optional: Automatic security updates
+# ----------------------------------------------------------------------------------
+print_info "Configuring unattended security updates..."
+apt-get install -y unattended-upgrades
+# Basic sane defaults; you can expand in .env later if needed
+cat >/etc/apt/apt.conf.d/51auto-reboot <<'UPD'
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "02:00";
+UPD
+
+print_success "UFW setup complete."
