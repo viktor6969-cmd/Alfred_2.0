@@ -1,26 +1,41 @@
 #!/usr/bin/env bash
 
-# ==================================================================================
-# UFW SETUP (packages, UFW, SSH cosmetics, auto updates)
-# ==================================================================================
-# Expectations from you:
-# - Run this from the project directory (same dir as .env and utils.sh)
-# - Run via: sudo bash ./main_setup.sh (or as root)
-# ==================================================================================
-
+#!/usr/bin/env bash
 set -euo pipefail
 
-[ "${EUID:-$(id -u)}" -eq 0 ] || { print_error "Please run as root (sudo)."; exit 1; }
+# ==================================================================================
+# USER MODULE — bootstrap for user rename and temporary SSH relaxation
+# ==================================================================================
+# Expectations:
+# - Run ONLY via server_auto.sh with -u mode (isolated user flow)
+# - Loads config from config/.env (via utils.sh)
+# - This script:
+#     1) Ensures root has a password (if missing/locked)
+#     2) Installs a temporary SSH drop-in from $SSH_BOOTSTRAP_CONF (port 42, root/pass)
+#     3) Validates & reloads SSH
+#     4) Stages /root/change_name.sh for phase 2
+# ==================================================================================
 
-# Load helpers and env
-if [ -f ./utils.sh ]; then
-    # shellcheck disable=SC1091
-    source ./utils.sh
+# ----------------------------------------------------------------------------------
+# Locate project root and utils
+# ----------------------------------------------------------------------------------
+SCRIPT_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
+MODULE_DIR="$(cd "$(dirname "$SCRIPT_REAL")" && pwd)"
+ROOT_DIR="$(cd "$MODULE_DIR/../.." && pwd)"
+UTILS_DIR="$ROOT_DIR/utils"
+
+[ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
+
+if [[ -f "$UTILS_DIR/utils.sh" ]]; then
+  # shellcheck disable=SC1090
+  source "$UTILS_DIR/utils.sh"
 else
-    echo "utils.sh file not found!"
-    exit 1
+  echo "utils.sh not found at $UTILS_DIR/utils.sh" >&2
+  exit 1
 fi
+
 load_env
+
 
 # Validate required environment variables
 required_vars=("UFW_PACKAGES" "UFW_DEFAULT_INCOMING" "UFW_DEFAULT_OUTGOING" "MASTER_IP" "CUSTOME_UFW_PROFILES")
