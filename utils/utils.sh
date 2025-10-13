@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-#================= Printing =================#
+# =================================================================================
+# Printing & help
+# =================================================================================
 INFO="\e[33m[!]\e[0m "
 ERROR="\e[31m[-]\e[0m "
 SUCCESS="\e[32m[+]\e[0m "
@@ -23,10 +25,13 @@ Usage: ./server_auto.sh [-y|-u|-r <module>|-l|-i <module>|-h]
 EOF
 }
 
-#=============== Paths ======================#
+# =================================================================================
+# Paths & config
+# =================================================================================
 UTILS_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
 UTILS_DIR="$(cd "$(dirname "$UTILS_REAL")" && pwd)"
 ROOT_DIR="$(cd "$UTILS_DIR/.." && pwd)"
+MODULES_DIR="$(cd "$(dirname "$ROOT_DIR/modules")" && pwd)"
 
 CONFIG_DIR="$ROOT_DIR/config"
 ENV_FILE="$CONFIG_DIR/.env"
@@ -37,7 +42,9 @@ MODULES_DIR="$ROOT_DIR/modules"
 BACKUP_DIR="$ROOT_DIR/.bkp"
 mkdir -p "$BACKUP_DIR"
 
-#=============== .env (optional secrets) =================#
+# =================================================================================
+# Env file (.env)
+# =================================================================================
 ensure_env() {
   [[ -f "$ENV_FILE" ]] || return 0
   if [[ -e "$ENV_FILE" ]] && [[ $(id -u) -eq 0 ]]; then
@@ -53,19 +60,43 @@ load_env() {
   source "$ENV_FILE"
 }
 
-#=============== server.conf (INI) =======================#
+# =================================================================================
+# INI-style config (server.conf)
+# =================================================================================
+
 # Get scalar: section + key -> value (no quotes)
 get_conf_value() {
   local section="$1" key="$2"
   [[ -f "$CONF_FILE" ]] || { print_error "Missing $CONF_FILE"; exit 1; }
-  awk -F= -v s="[$section]" -v k="$key" '
-    $0==s {in=1; next}
-    /^\[/ {in=0}
-    in && $1 ~ "^[[:space:]]*"k"[[:space:]]*$" {
-      val=$2
-      sub(/^[[:space:]]*/,"",val); sub(/[[:space:]]*$/,"",val)
-      gsub(/^"/,"",val); gsub(/"$/,"",val)
-      print val; exit
+  awk -v sec="$section" -v k="$key" '
+    function trim(s){ sub(/^[[:space:]]+/,"",s); sub(/[[:space:]]+$/,"",s); return s }
+    BEGIN{ INSIDE=0 }
+    # normalize [ section ]  → [section]
+    /^\[[[:space:]]*[^]]+\][[:space:]]*$/ {
+      line=$0
+      gsub(/[[:space:]]+/, "", line)
+      if (line=="[" sec "]") { INSIDE=1 } else { INSIDE=0 }
+      next
+    }
+    INSIDE {
+      # skip blank / comment
+      if ($0 ~ /^[[:space:]]*($|[#;])/) next
+
+      # split ONLY on first =
+      pos = index($0, "=")
+      if (!pos) next
+      key = trim(substr($0, 1, pos-1))
+      val = trim(substr($0, pos+1))
+
+      # strip inline comments (only if not quoted at end)
+      if (val ~ /[[:space:]]*[#;][^"'"'"']*$/ && val !~ /^".*"[[:space:]]*[#;]/ && val !~ /^'\''.*'\''[[:space:]]*[#;]/)
+        sub(/[[:space:]]*[#;].*$/, "", val)
+
+      # unquote "..." or '...'
+      if (val ~ /^".*"$/) { sub(/^"/,"",val); sub(/"$/,"",val) }
+      else if (val ~ /^'\''.*'\''$/) { sub(/^'\''/,"",val); sub(/'\''$/,"",val) }
+
+      if (key==k) { print val; exit }
     }
   ' "$CONF_FILE"
 }
@@ -74,12 +105,16 @@ get_conf_value() {
 get_conf_section() {
   local section="$1"
   [[ -f "$CONF_FILE" ]] || { print_error "Missing $CONF_FILE"; exit 1; }
-  awk -v s="[$section]" '
-    $0==s {in=1; next}
-    /^\[/ && in {exit}
-    in {print}
+  awk -v sec="$section" '
+    # match [ section ] with arbitrary spaces
+    /^\[[[:space:]]*[^]]+\][[:space:]]*$/ {
+      line=$0; gsub(/[[:space:]]+/, "", line)
+      if (line=="[" sec "]") { INSIDE=1; next } else if (INSIDE) { exit }
+    }
+    INSIDE { print }
   ' "$CONF_FILE"
 }
+
 
 # Load required global scalars into env
 load_server_conf() {
@@ -120,9 +155,9 @@ write_ufw_profiles() {
   mkdir -p "$apps_dir"
   : > "$apps_dir/custom-profiles.conf"
   awk '
-    /^\[ufw\.profile\./ {in=1; next}
-    /^\[/ && in {print ""; in=0}
-    in {print}
+    /^\[[[:space:]]*ufw\.profile\.[^]]+\][[:space:]]*$/ { INSIDE=1; next }
+    /^\[/ && INSIDE { print ""; INSIDE=0 }
+    INSIDE { print }
   ' "$CONF_FILE" | render_vars >> "$apps_dir/custom-profiles.conf"
   print_success "Wrote UFW profiles -> $apps_dir/custom-profiles.conf"
 }
@@ -132,9 +167,9 @@ write_knockd_config() {
   local out="/etc/knockd.conf"
   : > "$out.tmp"
   awk '
-    /^\[knockd\.profile\./ {in=1; next}
-    /^\[/ && in {print ""; in=0}
-    in {print}
+    /^\[[[:space:]]*knockd\.profile\.[^]]+\][[:space:]]*$/ { INSIDE=1; next }
+    /^\[/ && INSIDE { print ""; INSIDE=0 }
+    INSIDE { print }
   ' "$CONF_FILE" > "$out.tmp"
   mv -f "$out.tmp" "$out"
   chmod 640 "$out"
@@ -142,24 +177,33 @@ write_knockd_config() {
   print_success "Wrote knockd config -> $out"
 }
 
-#=============== Stamps (global path) ====================#
-STAMP_DIR="/var/lib/serverctl/modules"
-install -d -m 700 -o root -g root "$STAMP_DIR" >/dev/null 2>&1 || true
+# =================================================================================
+# Module management
+# =================================================================================
 
-is_installed() { [[ -f "$STAMP_DIR/$1.stamp" ]]; }
+is_installed() { [[ -f "$MODULES_DIR/$1/.stamp" ]]; }
 
-mark_installed() {
-  local m="$1" v ts
-  v="$(cat "$MODULES_DIR/$m/version.txt" 2>/dev/null || echo unknown)"
-  ts="$(date -Is)"
-  printf 'name=%s\nversion=%s\ninstalled_at=%s\n' "$m" "$v" "$ts" \
-    > "$STAMP_DIR/$m.stamp.tmp"
-  mv "$STAMP_DIR/$m.stamp.tmp" "$STAMP_DIR/$m.stamp"
-}
+valid_module() { [[ "$1" =~ ^[a-z0-9_-]+$ ]]; }
+
+mark_installed() { touch "$MODULES_DIR/$1/.installed"; }
 
 clear_installed() { rm -f "$STAMP_DIR/$1.stamp"; }
 
-#=============== Backups ===============================#
+module_exists() { [[ -f "$MODULES_DIR/$1/"$1"_setup.sh" ]]; }
+
+discover_modules() { find "$MODULES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort ;}
+
+module_desc() {
+  [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module"
+}
+
+module_reqs() {
+  local f="$MODULES_DIR/$1/requirements.txt"
+  [[ -f "$f" ]] || return 0
+  tr ' ' '\n' < "$f" | sed '/^$/d'
+}
+
+# #=============== Backups ===============================#
 backup_file() {
   local src="$1"
   if [[ -z "${src:-}" || ! -r "$src" ]]; then
