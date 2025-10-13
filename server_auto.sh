@@ -79,10 +79,9 @@ run_module() {
   done < <(module_reqs "$m" || true)
 
   # Execute module
-  echo -i "Installing $m...\n"
+  printf "Installing $m...\n"
   if bash "$MODULES_DIR/$m/"$m"_setup.sh"; then
     mark_installed "$m"
-    print_success "$m installed successfully."
   else
     local ec=$?
     print_error "$m failed with exit code $ec."
@@ -117,9 +116,9 @@ case "$ARG1" in
       reqs="$(module_reqs "$mod" | tr '\n' ' ')"
       echo "Requires: ${reqs:-none}"
       if is_installed "$mod"; then
-        echo -i "Status: \e[32m[installed]\e[0m\n"
+        printf "Status: \e[32m[installed]\e[0m\n"
       else
-        echo -i "Status: \e[31m[not installed]\e[0m\n"
+        printf "Status: \e[31m[not installed]\e[0m\n"
       fi
     else
       print_error "Module '$mod' not found."
@@ -128,7 +127,6 @@ case "$ARG1" in
     exit 0 ;;
 
   -u)
-    echo -e "Running user module..."
     run_module "user" "ask"
     exit 0 ;;
 
