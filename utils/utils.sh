@@ -6,11 +6,12 @@
 INFO="\e[33m[!]\e[0m "
 ERROR="\e[31m[-]\e[0m "
 SUCCESS="\e[32m[+]\e[0m "
-YES_REGEX="^([yY]|yes|YES|Yes|yep)$"
+YES_REGEX="^([yY]|yes|YES|Yes|yep)$" 
 
 print_info()    { printf "%b%s\n" "$INFO"    "$*"; }
 print_error()   { printf "%b%s\n" "$ERROR"   "$*"; }
 print_success() { printf "%b%s\n" "$SUCCESS" "$*"; }
+print_msg()     { printf " - %s\n"   "$*"; }
 
 print_help() {
   cat <<'EOF'
@@ -127,7 +128,7 @@ load_server_conf() {
 
 # Token renderer for common placeholders
 render_vars() {
-  local s="$1"
+  local s="${1:-}"
   s="${s//\{\{SSH_PORT_BOOTSTRAP\}\}/$SSH_PORT_BOOTSTRAP}"
   s="${s//\{\{SSH_PORT_FINAL\}\}/$SSH_PORT_FINAL}"
   s="${s//\{\{MASTER_IP\}\}/$MASTER_IP}"
@@ -158,7 +159,9 @@ write_ufw_profiles() {
     /^\[[[:space:]]*ufw\.profile\.[^]]+\][[:space:]]*$/ { INSIDE=1; next }
     /^\[/ && INSIDE { print ""; INSIDE=0 }
     INSIDE { print }
-  ' "$CONF_FILE" | render_vars >> "$apps_dir/custom-profiles.conf"
+  ' "$CONF_FILE" | while IFS= read -r line || [[ -n "$line" ]]; do
+    render_vars "$line"
+  done >> "$apps_dir/custom-profiles.conf"
   print_success "Wrote UFW profiles -> $apps_dir/custom-profiles.conf"
 }
 
@@ -181,21 +184,23 @@ write_knockd_config() {
 # Module management
 # =================================================================================
 
-is_installed() { [[ -f "$MODULES_DIR/$1/.stamp" ]]; }
+is_installed() { [[ -f "$MODULES_DIR/$1/.installed" ]]; }
 
 valid_module() { [[ "$1" =~ ^[a-z0-9_-]+$ ]]; }
 
-mark_installed() { touch "$MODULES_DIR/$1/.installed"; }
+mark_installed() {
+  local stamp
+  stamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  echo "Installed: $stamp" > "$MODULES_DIR/$1/.installed"
+}
 
-clear_installed() { rm -f "$STAMP_DIR/$1.stamp"; }
+clear_installed() { rm -f "$STAMP_DIR/$1.installed"; }
 
 module_exists() { [[ -f "$MODULES_DIR/$1/"$1"_setup.sh" ]]; }
 
 discover_modules() { find "$MODULES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort ;}
 
-module_desc() {
-  [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module"
-}
+module_desc() { [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module";}
 
 module_reqs() {
   local f="$MODULES_DIR/$1/requirements.txt"
