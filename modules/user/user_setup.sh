@@ -96,24 +96,24 @@ fi
 # ----------------------------------------------------------------------------------
 # SSH bootstrap drop-in from server.conf
 # ----------------------------------------------------------------------------------
-print_info "Backing up /etc/ssh/sshd_config to .bkp ..."
+echo -e "Backing up /etc/ssh/sshd_config to .bkp ..."
 backup_file "/etc/ssh/sshd_config"
 
-print_info "Writing SSH bootstrap drop-in from [ssh.bootstrap]..."
+echo -e "Writing SSH bootstrap drop-in from [ssh.bootstrap]..."
 mkdir -p /etc/ssh/sshd_config.d
 write_ssh_bootstrap
 
-print_info "Validating sshd config..."
+echo -e "Validating sshd config..."
 if ! sshd -t; then
   print_error "SSH config invalid. Aborting before reload."
   exit 1
 fi
 
-print_info "Reloading SSH with bootstrap settings..."
+echo -e "Reloading SSH with bootstrap settings..."
 if systemctl is-active --quiet ssh; then
   systemctl reload ssh || systemctl restart ssh
 else
-  print_info "Starting SSH service..."
+  echo -e "Starting SSH service..."
   systemctl start ssh
 fi
 print_success "SSH bootstrap applied (port ${SSH_PORT_BOOTSTRAP})."
@@ -127,8 +127,10 @@ DST_CHANGE="/root/change_name.sh"
 
 [[ -f "$SRC_CHANGE" ]] || { print_error "change_name.sh not found in $MODULE_DIR"; exit 1; }
 
-print_info "Staging $DST_CHANGE ..."
-install -m 700 -o root -g root "$SRC_CHANGE" "$DST_CHANGE"
+echo -e "Staging $DST_CHANGE ..."
+ln -sfn "$SRC_CHANGE" "$DST_CHANGE"
+chmod 700 "$SRC_CHANGE"        # ensure the target is executable
+chown root:root "$SRC_CHANGE"  # optional if you care
 
 print_success "User bootstrap complete."
 print_info "Reconnect as root on port ${SSH_PORT_BOOTSTRAP} and run: /root/change_name.sh"

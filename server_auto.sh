@@ -32,6 +32,7 @@ MODULES_DIR="$ROOT_DIR/modules"
 # ----------------------------------------------------------------------------------
 # Utilities
 # ----------------------------------------------------------------------------------
+
 if [[ -f "$UTILS_DIR/utils.sh" ]]; then
   # shellcheck disable=SC1090
   source "$UTILS_DIR/utils.sh"
@@ -40,34 +41,12 @@ else
   exit 1
 fi
 
-# Load .env (secrets) and server.conf (scalars/blocks)
-load_env
 load_server_conf
-
-# ----------------------------------------------------------------------------------
-# Helpers (module discovery / info)
-# ----------------------------------------------------------------------------------
-valid_module() { [[ "$1" =~ ^[a-z0-9_-]+$ ]]; }
-
-discover_modules() {
-  find "$MODULES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
-}
-
-module_exists() { [[ -x "$MODULES_DIR/$1/setup.sh" ]]; }
-
-module_desc() {
-  [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module"
-}
-
-module_reqs() {
-  local f="$MODULES_DIR/$1/requirements.txt"
-  [[ -f "$f" ]] || return 0
-  tr ' ' '\n' < "$f" | sed '/^$/d'
-}
 
 # ----------------------------------------------------------------------------------
 # Core: run_module (ask | force | reinstall)
 # ----------------------------------------------------------------------------------
+
 run_module() {
   local m="$1"
   local mode="${2:-ask}"  # ask | force | reinstall
@@ -76,31 +55,15 @@ run_module() {
   module_exists "$m" || { print_error "Missing setup.sh for $m"; exit 1; }
 
   # Short-circuit if already installed
-  if is_installed "$m"; then
-    case "$mode" in
-      force)
-        print_info "$m already installed, skipping..."
-        return 0
-        ;;
-      reinstall)
-        print_info "Reinstalling $m..."
-        clear_installed "$m"
-        ;;
-      ask)
-        read -rp "$m already installed. Reinstall with defaults? (y/N): " _ans; echo
-        if [[ ! $_ans =~ $YES_REGEX ]]; then
-          print_info "Skipping $m."
-          return 0
-        fi
-        clear_installed "$m"
-        ;;
-    esac
+  if is_installed "$m" && [[ ! "$mode" == "reinstall" ]]; then
+    read -rp "$m already installed. Reinstall with defaults? (y/N): " ans; echo
+    [[ ! $ans =~ $YES_REGEX ]] && { print_info "Skipping $m"; return 0; }
   fi
 
   # Dependencies (only for new/reinstall)
   local dep
   while read -r dep; do
-    [[ -z "$dep" ]] && continue
+    [[ -z "$dep" || "$dep" =~ ^# ]] && continue
     [[ "$dep" == "user" ]] && { print_error "user cannot be a dependency"; exit 1; }
 
     if ! is_installed "$dep"; then
@@ -116,10 +79,9 @@ run_module() {
   done < <(module_reqs "$m" || true)
 
   # Execute module
-  print_info "Installing $m..."
-  if bash "$MODULES_DIR/$m/setup.sh"; then
+  printf "Installing $m...\n"
+  if bash "$MODULES_DIR/$m/"$m"_setup.sh"; then
     mark_installed "$m"
-    print_success "$m installed successfully."
   else
     local ec=$?
     print_error "$m failed with exit code $ec."
@@ -140,7 +102,7 @@ case "$ARG1" in
   -l)
     echo "Available modules:"
     for m in $(discover_modules); do
-      printf "  %-12s - %s\n" "$m" "$(module_desc "$m")"
+      printf "\e[33m%-12s\e[0m - %s\n" "$m" "$(module_desc "$m")"
     done
     exit 0 ;;
 
@@ -165,7 +127,6 @@ case "$ARG1" in
     exit 0 ;;
 
   -u)
-    print_info "Running user module..."
     run_module "user" "ask"
     exit 0 ;;
 
@@ -178,7 +139,7 @@ case "$ARG1" in
     exit 0 ;;
 
   -y)
-    print_info "Full auto installation (-y)."
+    printf "Full auto installation (-y).\n"
     # UFW first if missing
     if ! is_installed "ufw"; then
       run_module "ufw" "force"
@@ -199,7 +160,7 @@ case "$ARG1" in
     exit 0 ;;
 
   "")
-    print_info "Interactive mode."
+    echo -e "** Interactive mode **\n"
     # UFW first if missing
     if ! is_installed "ufw"; then
       run_module "ufw" "ask"
