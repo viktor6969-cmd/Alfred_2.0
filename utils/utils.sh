@@ -6,7 +6,7 @@
 INFO="\e[33m[!]\e[0m "
 ERROR="\e[31m[-]\e[0m "
 SUCCESS="\e[32m[+]\e[0m "
-YES_REGEX="^([yY]|yes|YES|Yes|yep)$"
+YES_REGEX="^([yY]|yes|YES|Yes|yep)$" 
 
 print_info()    { printf "%b%s\n" "$INFO"    "$*"; }
 print_error()   { printf "%b%s\n" "$ERROR"   "$*"; }

@@ -10,7 +10,7 @@ set -euo pipefail
 #   -r <module>   Install/reinstall a specific module (prompts if already installed)
 #   -l            List all modules with descriptions
 #   -i <module>   Show module description + installed status
-#   -h            print help
+#   -h            print help and exit
 #   (no args)     Interactive mode; UFW runs first if missing, then prompts per module
 #
 # Notes:
