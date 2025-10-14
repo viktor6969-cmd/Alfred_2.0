@@ -21,8 +21,7 @@ set -euo pipefail
 # Locate project root and utils
 # ----------------------------------------------------------------------------------
 SCRIPT_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
-MODULE_DIR="$(cd "$(dirname "$SCRIPT_REAL")" && pwd)"
-ROOT_DIR="$(cd "$MODULE_DIR/../.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_REAL")"/../.. && pwd)"
 UTILS_DIR="$ROOT_DIR/utils"
 
 [ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
@@ -39,52 +38,61 @@ fi
 load_server_conf
 
 # Read UFW section from server.conf (fall back to sane defaults if absent)
-UFW_DEFAULT_INCOMING="$(get_conf_value ufw DEFAULT_INCOMING || true)"; UFW_DEFAULT_INCOMING="${UFW_DEFAULT_INCOMING:-deny}"
+UFW_DEFAULT_INCOMING="$(get_conf_value ufw DEFAULT_INCOMING || true)"; UFW_DEFAULT_INCOMING="${UFW_DEFAULT_INCOMING:-drop}"
 UFW_DEFAULT_OUTGOING="$(get_conf_value ufw DEFAULT_OUTGOING || true)"; UFW_DEFAULT_OUTGOING="${UFW_DEFAULT_OUTGOING:-allow}"
-UFW_PACKAGES="$(get_conf_value ufw PACKAGES || true)";           UFW_PACKAGES="${UFW_PACKAGES:-ufw unattended-upgrades}"
+UFW_PACKAGES="$(get_conf_value ufw PACKAGES || true)"; UFW_PACKAGES="${UFW_PACKAGES:-ufw fail2ban}"
 
 # ----------------------------------------------------------------------------------
 # Packages (prompt before install)
 # ----------------------------------------------------------------------------------
 if [[ -n "${UFW_PACKAGES:-}" ]]; then
-  print_info "The following packages will be installed: ${UFW_PACKAGES}"
-  read -rp "Proceed with package installation? (y/N): " ans; echo
-  if [[ $ans =~ $YES_REGEX ]]; then
-    print_info "Updating apt cache..."
-    apt-get update -y
-    print_info "Installing packages..."
-    # shellcheck disable=SC2086
-    apt-get install -y ${UFW_PACKAGES}
-    print_success "Packages installed."
+  missing_pkgs=()
+  for pkg in ${UFW_PACKAGES}; do
+    dpkg -s "$pkg" &>/dev/null || missing_pkgs+=("$pkg")
+  done
+
+  if (( ${#missing_pkgs[@]} > 0 )); then
+    print_info "The following packages are missing: ${missing_pkgs[*]}"
+    read -rp "Proceed with installation of missing packages? (y/N): " ans; echo
+    if [[ $ans =~ $YES_REGEX ]]; then
+      print_msg "Updating apt cache..."
+      apt-get update -y
+      print_msg "Installing packages..."
+      apt-get install -y "${missing_pkgs[@]}"
+      print_success "Packages installed."
+    else
+      print_error "Can't proceed without installing required packages. Exiting."
+      exit 1
+    fi
   else
-    print_info "Skipping package installation."
+    print_info "All required packages are already installed."
   fi
 fi
 
 # ----------------------------------------------------------------------------------
 # Configure UFW defaults + MASTER_IP allow
 # ----------------------------------------------------------------------------------
-print_info "Configuring UFW default policies..."
+print_msg "Configuring UFW default policies..."
 ufw --force reset >/dev/null 2>&1 || true
 ufw default "${UFW_DEFAULT_INCOMING}" incoming
 ufw default "${UFW_DEFAULT_OUTGOING}" outgoing
 
-print_info "Whitelisting management IP: ${MASTER_IP}"
+print_msg "Whitelisting management IP: ${MASTER_IP}"
 ufw allow from "${MASTER_IP}"
 
 # ----------------------------------------------------------------------------------
 # Write UFW application profiles from server.conf
 # ----------------------------------------------------------------------------------
-print_info "Writing UFW application profiles from [ufw.profile.*]..."
+print_msg "Writing UFW application profiles from [ufw.profile.*]..."
 write_ufw_profiles
 
 # ----------------------------------------------------------------------------------
 # Enable UFW and configure logging
 # ----------------------------------------------------------------------------------
-print_info "Enabling UFW (non-interactive)..."
+print_msg "Enabling UFW (non-interactive)..."
 ufw --force enable
 
-print_info "Configuring UFW logging via rsyslog..."
+print_msg "Configuring UFW logging via rsyslog..."
 rsys_conf="/etc/rsyslog.d/20-ufw.conf"
 cat > "$rsys_conf" <<'RSYS'
 # Log kernel-generated UFW messages to a dedicated file
@@ -98,16 +106,16 @@ systemctl restart rsyslog
 # ----------------------------------------------------------------------------------
 read -rp "Do you want to configure knockd (port knocking)? (y/N): " ans; echo
 if [[ $ans =~ $YES_REGEX ]]; then
-  print_info "Installing knockd..."
+  print_msg "Installing knockd..."
   apt-get update -y
   apt-get install -y knockd
 
-  print_info "Writing /etc/knockd.conf from [knockd.profile.*]..."
+  print_msg "Writing /etc/knockd.conf from [knockd.profile.*]..."
   write_knockd_config
 
   systemctl enable knockd >/dev/null 2>&1 || true
   systemctl restart knockd
-  print_success "knockd installed and configured."
+  print_msg "knockd installed and configured."
 else
   print_info "Skipping knockd."
 fi

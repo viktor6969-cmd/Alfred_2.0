@@ -10,7 +10,8 @@ set -euo pipefail
 #   -r <module>   Install/reinstall a specific module (prompts if already installed)
 #   -l            List all modules with descriptions
 #   -i <module>   Show module description + installed status
-#   -h            Print help
+#   -h            print help
+#   (no args)     Interactive mode; UFW runs first if missing, then prompts per module
 #
 # Notes:
 #   • Run as root (sudo).
@@ -63,7 +64,7 @@ run_module() {
   # Dependencies (only for new/reinstall)
   local dep
   while read -r dep; do
-    [[ -z "$dep" || "$dep" =~ ^# ]] && continue
+    [[ -z "$dep" || "$dep" =~ ^# || "$dep" =~ ^[Ee]mpty$ ]] && continue
     [[ "$dep" == "user" ]] && { print_error "user cannot be a dependency"; exit 1; }
 
     if ! is_installed "$dep"; then
@@ -79,7 +80,7 @@ run_module() {
   done < <(module_reqs "$m" || true)
 
   # Execute module
-  printf "Installing $m...\n"
+  print_msg "Installing $m...\n"
   if bash "$MODULES_DIR/$m/"$m"_setup.sh"; then
     mark_installed "$m"
   else
@@ -102,7 +103,7 @@ case "$ARG1" in
   -l)
     echo "Available modules:"
     for m in $(discover_modules); do
-      printf "\e[33m%-12s\e[0m - %s\n" "$m" "$(module_desc "$m")"
+      print_msg "\e[33m%-12s\e[0m - %s\n" "$m" "$(module_desc "$m")"
     done
     exit 0 ;;
 
@@ -139,7 +140,7 @@ case "$ARG1" in
     exit 0 ;;
 
   -y)
-    printf "Full auto installation (-y).\n"
+    print_msg "Full auto installation (-y).\n"
     # UFW first if missing
     if ! is_installed "ufw"; then
       run_module "ufw" "force"
@@ -160,7 +161,7 @@ case "$ARG1" in
     exit 0 ;;
 
   "")
-    echo -e "** Interactive mode **\n"
+    print_msg "** Interactive mode **\n"
     # UFW first if missing
     if ! is_installed "ufw"; then
       run_module "ufw" "ask"
