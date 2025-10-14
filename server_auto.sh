@@ -161,7 +161,7 @@ case "$ARG1" in
     exit 0 ;;
 
   "")
-    print_msg "** Interactive mode **\n"
+    echo "** Interactive mode **"
     # UFW first if missing
     if ! is_installed "ufw"; then
       run_module "ufw" "ask"

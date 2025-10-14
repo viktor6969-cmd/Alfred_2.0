@@ -80,6 +80,12 @@ ufw default "${UFW_DEFAULT_OUTGOING}" outgoing
 print_msg "Whitelisting management IP: ${MASTER_IP}"
 ufw allow from "${MASTER_IP}"
 
+read -rp "Do you want to drop the ping requests(y/N): " ans; echo
+[[ $ans =~ $YES_REGEX ]] && sudo ufw insert 1 deny proto icmp from any to any
+
+read -rp "Activate the SSH profile? (y/N):\n (if not, will close ssh access to any other IP exept the master IP) " ans; echo
+[[ $ans =~ $YES_REGEX ]] && sudo ufw allow SSH-Custom
+
 # ----------------------------------------------------------------------------------
 # Write UFW application profiles from server.conf
 # ----------------------------------------------------------------------------------

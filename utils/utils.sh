@@ -154,14 +154,41 @@ write_ssh_secure() {
 write_ufw_profiles() {
   local apps_dir="/etc/ufw/applications.d"
   mkdir -p "$apps_dir"
-  : > "$apps_dir/custom-profiles.conf"
-  awk '
-    /^\[[[:space:]]*ufw\.profile\.[^]]+\][[:space:]]*$/ { INSIDE=1; next }
-    /^\[/ && INSIDE { print ""; INSIDE=0 }
-    INSIDE { print }
-  ' "$CONF_FILE" | while IFS= read -r line || [[ -n "$line" ]]; do
-    render_vars "$line"
-  done >> "$apps_dir/custom-profiles.conf"
+  
+  # Get template values from config
+  local ssh_port_bootstrap ssh_port_final
+  ssh_port_bootstrap=$(get_conf_value global SSH_PORT_BOOTSTRAP 2>/dev/null || echo "22")
+  ssh_port_final=$(get_conf_value global SSH_PORT_FINAL 2>/dev/null || echo "22")
+  
+  awk -v ssh_bootstrap="$ssh_port_bootstrap" -v ssh_final="$ssh_port_final" '
+    # Track when we are inside a ufw.profile section
+    /^\[ufw\.profile\.[^]]+\][[:space:]]*$/ {
+      profile_name = $0
+      sub(/^\[ufw\.profile\./, "", profile_name)
+      sub(/\][[:space:]]*$/, "", profile_name)
+      in_ufw_section = 1
+      print "[" profile_name "]"
+      next
+    }
+    
+    # If we encounter any other section header, stop processing ufw.profile section
+    /^\[[^]]+\][[:space:]]*$/ && !/^\[ufw\.profile\./ {
+      in_ufw_section = 0
+      next
+    }
+    
+    # Only print lines when we are inside a ufw.profile section
+    in_ufw_section && NF {
+      line = $0
+      
+      # Substitute template variables
+      gsub(/{{SSH_PORT_BOOTSTRAP}}/, ssh_bootstrap, line)
+      gsub(/{{SSH_PORT_FINAL}}/, ssh_final, line)
+      
+      print line
+    }
+  ' "$CONF_FILE" > "$apps_dir/custom-profiles.conf"
+  
   print_success "Wrote UFW profiles -> $apps_dir/custom-profiles.conf"
 }
 
