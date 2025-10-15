@@ -55,11 +55,9 @@ if [[ -n "${UFW_PACKAGES:-}" ]]; then
     print_info "The following packages are missing: ${missing_pkgs[*]}"
     read -rp "Proceed with installation of missing packages? (y/N): " ans; echo
     if [[ $ans =~ $YES_REGEX ]]; then
-      print_msg "Updating apt cache..."
-      apt-get update -y
-      print_msg "Installing packages..."
-      apt-get install -y "${missing_pkgs[@]}"
-      print_success "Packages installed."
+      for pkg in "${missing_pkgs[@]}"; do
+        install_pkg "$pkg"
+      done
     else
       print_error "Can't proceed without installing required packages. Exiting."
       exit 1
@@ -80,6 +78,8 @@ ufw default "${UFW_DEFAULT_OUTGOING}" outgoing
 print_msg "Whitelisting management IP: ${MASTER_IP}"
 ufw allow from "${MASTER_IP}"
 
+
+# !!!!!!!!!!!!!! FIX TE PING !!!!!!!!!!!!!!
 read -rp "Do you want to drop the ping requests(y/N): " ans; echo
 [[ $ans =~ $YES_REGEX ]] && sudo ufw insert 1 deny proto icmp from any to any
 
@@ -113,8 +113,7 @@ systemctl restart rsyslog
 read -rp "Do you want to configure knockd (port knocking)? (y/N): " ans; echo
 if [[ $ans =~ $YES_REGEX ]]; then
   print_msg "Installing knockd..."
-  apt-get update -y
-  apt-get install -y knockd
+  install_pkg "knockd"
 
   print_msg "Writing /etc/knockd.conf from [knockd.profile.*]..."
   write_knockd_config
@@ -131,8 +130,7 @@ fi
 # ----------------------------------------------------------------------------------
 read -rp "Enable unattended security upgrades (auto-reboot at 02:00)? (y/N): " ans; echo
 if [[ $ans =~ $YES_REGEX ]]; then
-  apt-get update -y
-  apt-get install -y unattended-upgrades
+  install_pkg "unattended-upgrades"
   cat >/etc/apt/apt.conf.d/51auto-reboot <<'UPD'
 Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "02:00";

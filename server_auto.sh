@@ -60,7 +60,7 @@ run_module() {
     read -rp "$m already installed. Reinstall with defaults? (y/N): " ans; echo
     [[ ! $ans =~ $YES_REGEX ]] && { print_info "Skipping $m"; return 0; }
   fi
-
+  clear_installed() "$m"  # clear stamp if reinstalling
   # Dependencies (only for new/reinstall)
   local dep
   while read -r dep; do
@@ -103,11 +103,11 @@ case "$ARG1" in
   -l)
     echo "Available modules:"
     for m in $(discover_modules); do
-      print_msg "\e[33m%-12s\e[0m - %s\n" "$m" "$(module_desc "$m")"
+      printf "\e[36m%-12s\e[0m - %s\n" "$m" "$(module_desc "$m")"
     done
     exit 0 ;;
 
-  -i)
+  -i) 
     mod="${2:-}"
     [[ -n "$mod" ]] || { print_error "Usage: $0 -i <module>"; exit 1; }
     valid_module "$mod" || { print_error "Invalid module name: $mod"; exit 1; }
@@ -160,6 +160,19 @@ case "$ARG1" in
     print_success "All modules installed (-y)."
     exit 0 ;;
 
+  -dark)
+    #Add an iptables rule to block all incoming connections including ssh and ICMP (ping)
+    print_info "*** WARNING ***\nThis action will overwrite curent UFW rules and settings!\n Block all incoming connections (Exept the master ip) including ssh and ICMP (ping), and the server will apear dead to the outside world."
+    print_info "Meke sure to secure access to the server via console or other means before proceeding."
+    read -rp "Are you sure you want to continue? (y/N): " ans; echo
+    if [[ $ans =~ $YES_REGEX ]]; then
+      print_msg "Activating dark mode..."
+      if ! is_installed "ufw"; then
+        print_info "The UFW module is not installed. Installing it first..."
+        run_module "ufw" "force"
+      fi
+      print_success "Bravo six go dark"
+    fi
   "")
     echo "** Interactive mode **"
     # UFW first if missing

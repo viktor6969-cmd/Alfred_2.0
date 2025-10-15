@@ -211,15 +211,10 @@ write_knockd_config() {
 # Module management
 # =================================================================================
 
-is_installed() { [[ -f "$MODULES_DIR/$1/.installed" ]]; }
 
 valid_module() { [[ "$1" =~ ^[a-z0-9_-]+$ ]]; }
 
-mark_installed() {
-  local stamp
-  stamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "Installed: $stamp" > "$MODULES_DIR/$1/.installed"
-}
+is_installed() { [[ -f "$MODULES_DIR/$1/.installed" ]]; }
 
 clear_installed() { rm -f "$STAMP_DIR/$1.installed"; }
 
@@ -229,10 +224,29 @@ discover_modules() { find "$MODULES_DIR" -mindepth 1 -maxdepth 1 -type d -printf
 
 module_desc() { [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module";}
 
+mark_installed() {
+  local stamp
+  stamp="$(date '+%Y-%m-%d %H:%M:%S')"
+  echo "Installed: $stamp" > "$MODULES_DIR/$1/.installed"
+}
+
 module_reqs() {
   local f="$MODULES_DIR/$1/requirements.txt"
   [[ -f "$f" ]] || return 0
   tr ' ' '\n' < "$f" | sed '/^$/d'
+}
+
+
+# =================================================================================
+# PKG management
+# =================================================================================
+install_pkg() {
+  [[ -n "$1" ]] || { print_error "install_pkg: missing package name"; return 1; }
+  [[ which "$1" &>/dev/null ]] && return 0
+  print_msg "Installing package: $1"
+  apt-get update -y
+  apt-get install -y "$1"
+  return $?
 }
 
 # #=============== Backups ===============================#
