@@ -1,1 +1,3 @@
-#KeepEmpty
+# A list of packages required by the ufw module
+ufw 
+fail2ban

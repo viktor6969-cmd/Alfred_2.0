@@ -44,74 +44,111 @@ fi
 
 load_server_conf
 
-# ----------------------------------------------------------------------------------
-# Core: run_module (ask | force | reinstall)
-# ----------------------------------------------------------------------------------
+# =================================================================================
+# Module management functions
+# =================================================================================
 
-run_module() {
-  local m="$1"
-  local mode="${2:-ask}"  # ask | force | reinstall
+run_module() {   # $1 {module name} $2 { ask | force }
+  local m="${1//[^a-zA-Z0-9_-]/}"  # Sanitize module name
+  local mode="${2:-ask}"
 
   valid_module "$m" || { print_error "Invalid module name: $m"; exit 1; }
   module_exists "$m" || { print_error "Missing setup.sh for $m"; exit 1; }
 
-  # Short-circuit if already installed
-  if is_installed "$m" && [[ ! "$mode" == "reinstall" ]]; then
-    read -rp "$m already installed. Reinstall with defaults? (y/N): " ans; echo
-    [[ ! $ans =~ $YES_REGEX ]] && { print_info "Skipping $m"; return 0; }
-  fi
-  clear_installed() "$m"  # clear stamp if reinstalling
-  # Dependencies (only for new/reinstall)
-  local dep
-  while read -r dep; do
-    [[ -z "$dep" || "$dep" =~ ^# || "$dep" =~ ^[Ee]mpty$ ]] && continue
-    [[ "$dep" == "user" ]] && { print_error "user cannot be a dependency"; exit 1; }
 
-    if ! is_installed "$dep"; then
-      if [[ "$mode" == "force" || "$mode" == "reinstall" ]]; then
-        run_module "$dep" "force"
-      else
-        print_info "Dependency '$dep' is not installed for module '$m'."
-        read -rp "Install '$dep' now? (y/N): " ans; echo
-        [[ $ans =~ $YES_REGEX ]] || { print_error "Cannot continue installing '$m' without '$dep'."; exit 1; }
-        run_module "$dep" "ask"
-      fi
+  if [[ "$mode" == "ask" ]]; then
+    if is_installed "$m"; then
+      read -rp "$m already installed. Reinstall with defaults? (y/N): " ans; echo
+      [[ ! $ans =~ $YES_REGEX ]] && { print_info "Skipping $m"; return 0; }
+    else
+      read -rp "Install the $m module? (y/N): " ans; echo
+      [[ ! $ans =~ $YES_REGEX ]] && { print_info "Skipping $m"; return 0; }
     fi
-  done < <(module_reqs "$m" || true)
+  fi
+
+  # Clear install stamp if reinstalling
+  clear_installed "$m"
+
+  install_module_dep "$m" "$mode" || { print_error "Failed to install dependencies for $m"; return 1; }
 
   # Execute module
   print_msg "Installing $m...\n"
-  if bash "$MODULES_DIR/$m/"$m"_setup.sh"; then
-    mark_installed "$m"
-  else
-    local ec=$?
-    print_error "$m failed with exit code $ec."
-    print_error "Module NOT marked as installed. Fix errors and rerun."
-    exit "$ec"
+  local script_path="$MODULES_DIR/$m/${m}_setup.sh"
+  [[ -f "$script_path" ]] || { print_error "Script not found: $script_path"; return 1; }
+  if ! bash "$script_path"; then
+      local ec=$?
+      print_error "$m failed with exit code $ec"
+      return $ec
   fi
+  mark_installed "$m"
 }
 
-# ----------------------------------------------------------------------------------
-# CLI
-# ----------------------------------------------------------------------------------
-ARG1="${1:-}"
+module_reqs() {
+  local f="$MODULES_DIR/$1/requirements.txt"
+  [[ -f "$f" ]] || return 0
+  awk '/^[[:space:]]*#/ {next} /^[[:space:]]*$/ {next} {print $0}' "$f"
+}
 
-case "$ARG1" in
-  -h)
-    print_help; exit 0 ;;
+install_module_dep() {  # $1 module, $2 ask|force
+  local m="$1" mode="${2:-ask}" f="$MODULES_DIR/$m/packages.txt" pkg
+  [[ -f "$f" ]] || return 0
+  if [[ "$mode" != "force" ]]; then
+    print_info "The $m module needs the following packages:"
+    sed -E '/^[[:space:]]*(#|$)/d' "$f" | sed 's/^/  - /'
+    read -rp "Install them now? (y/N): " ans; echo
+    [[ $ans =~ $YES_REGEX ]] || { print_error "Skipping $m due to missing packages."; return 1; }
+  fi
+  apt-get -qq update
+  while read -r pkg; do
+    [[ -z "$pkg" || "$pkg" =~ ^# ]] && continue
+    dpkg -s "$pkg" &>/dev/null && continue
+    apt-get -qq install -y "$pkg" || { print_error "Failed to install '$pkg'"; return 1; }
+  done < "$f"
+}
 
-  -l)
-    echo "Available modules:"
-    for m in $(discover_modules); do
-      printf "\e[36m%-12s\e[0m - %s\n" "$m" "$(module_desc "$m")"
-    done
-    exit 0 ;;
 
-  -i) 
-    mod="${2:-}"
-    [[ -n "$mod" ]] || { print_error "Usage: $0 -i <module>"; exit 1; }
-    valid_module "$mod" || { print_error "Invalid module name: $mod"; exit 1; }
-    if module_exists "$mod"; then
+sanitize_module_name() {
+    local name="${1//[^a-zA-Z0-9_-]/}"
+    echo "$name"
+}
+
+# Validate module name (alphanumeric, _, -)
+valid_module()      { [[ "$1" =~ ^[a-z0-9_-]+$ ]]; }
+
+# Check if module setup.sh exists
+module_exists()     { [[ -f "$MODULES_DIR/$1/"$1"_setup.sh" ]]; }
+
+# Read module description
+module_desc()       { [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module";}
+
+# Check if module is installed
+is_installed()      { [[ -f "$MODULES_DIR/$1/.installed" ]]; }
+
+# Add installed stamp
+mark_installed()    { printf 'Installed: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$MODULES_DIR/$1/.installed"; }
+
+# List available modules
+discover_modules()  { find "$MODULES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort ;}
+
+# Clear installed stamp
+clear_installed()   { rm -f "$MODULES_DIR/$1/.installed"; }
+
+# =================================================================================
+# Case managment functions
+# =================================================================================
+
+list_modules() {
+  echo "Available modules:"
+  for m in $(discover_modules); do
+    printf "%-12s : %s\n" "$m" "$(module_desc "$m")"
+  done
+}
+
+print_module_info() { # $1 {module name}
+  local mod="$1"
+  [[ -n "$mod" ]] || { print_error "Usage: $0 -i <module>"; exit 1; }
+  valid_module "$mod" || { print_error "Invalid module name: $mod"; exit 1; }
+  if module_exists "$mod"; then
       echo "Module: $mod"
       echo "Description: $(module_desc "$mod")"
       reqs="$(module_reqs "$mod" | tr '\n' ' ')"
@@ -121,49 +158,41 @@ case "$ARG1" in
       else
         printf "Status: \e[31m[not installed]\e[0m\n"
       fi
-    else
-      print_error "Module '$mod' not found."
-      exit 1
+  else
+    print_error "Module '$mod' not found."
+    exit 1
+  fi
+}
+
+handle_auto_mode() {
+  print_msg "Full auto installation (-y).\n"
+  for m in $(discover_modules); do
+    [[ "$m" == "user" ]] && continue
+    print_msg "Installing module: $m"
+    run_module "$m" "force" || { print_error "Module $m installation failed."; return 1; }
+  done
+  print_success "Auto installation complete."
+  return 0
+}
+
+handle_interactive_mode() {
+  for m in $(discover_modules); do
+    [[ "$m" == "user" ]] && continue
+    
+    read -rp "Install the $m module? (y/N): " ans; echo
+    if [[ $ans =~ $YES_REGEX ]]; then
+        if ! run_module "$m" "ask"; then
+            print_error "Module $m installation failed. Skipping."
+        fi
     fi
-    exit 0 ;;
+  done
+  print_success "Interactive installation complete."
+}
 
-  -u)
-    run_module "user" "ask"
-    exit 0 ;;
-
-  -r)
-    mod="${2:-}"
-    [[ -n "$mod" ]] || { print_error "Usage: $0 -r <module>"; exit 1; }
-    valid_module "$mod" || { print_error "Invalid module name: $mod"; exit 1; }
-    module_exists "$mod" || { print_error "Module '$mod' not found"; exit 1; }
-    run_module "$mod" "reinstall"
-    exit 0 ;;
-
-  -y)
-    print_msg "Full auto installation (-y).\n"
-    # UFW first if missing
-    if ! is_installed "ufw"; then
-      run_module "ufw" "force"
-    else
-      print_info "The UFW module is already installed."
-      read -rp "Do you want to reinstall it now? (y/N): " ans; echo
-      if [[ $ans =~ $YES_REGEX ]]; then
-        run_module "ufw" "force"
-      else
-        print_info "Skipping UFW module"
-      fi
-    fi
-    for m in $(discover_modules); do
-      [[ "$m" == "ufw" || "$m" == "user" ]] && continue
-      run_module "$m" "force"
-    done
-    print_success "All modules installed (-y)."
-    exit 0 ;;
-
-  -dark)
-    #Add an iptables rule to block all incoming connections including ssh and ICMP (ping)
+handle_dark_mode() {
+  #Add an iptables rule to block all incoming connections including ssh and ICMP (ping)
     print_info "*** WARNING ***\nThis action will overwrite curent UFW rules and settings!\n Block all incoming connections (Exept the master ip) including ssh and ICMP (ping), and the server will apear dead to the outside world."
-    print_info "Meke sure to secure access to the server via console or other means before proceeding."
+    print_info "Make sure to secure access to the server via console or other means before proceeding."
     read -rp "Are you sure you want to continue? (y/N): " ans; echo
     if [[ $ans =~ $YES_REGEX ]]; then
       print_msg "Activating dark mode..."
@@ -173,23 +202,48 @@ case "$ARG1" in
       fi
       print_success "Bravo six go dark"
     fi
-  "")
-    echo "** Interactive mode **"
-    # UFW first if missing
-    if ! is_installed "ufw"; then
-      run_module "ufw" "ask"
-    else
-      print_info "UFW already installed — skipping."
-    fi
-    for m in $(discover_modules); do
-      [[ "$m" == "ufw" || "$m" == "user" ]] && continue
-      run_module "$m" "ask"
-    done
-    print_success "Interactive installation complete."
-    exit 0 ;;
+}
 
-  *)
-    print_error "Unknown option: $ARG1"
-    print_help
-    exit 1 ;;
-esac
+handle_unexpected_error() {
+    local exit_code=$?
+    print_error "Unexpected error occurred (line: ${BASH_LINENO[0]}). Exiting."
+    exit $exit_code
+}
+# =================================================================================
+# Main function
+# =================================================================================
+main() {
+  local exit_code=0
+  local arg1="${1:-}"
+
+  case "$arg1" in
+    -h)     print_help; exit_code=0 ;;
+    -l)     list_modules; exit_code=0 ;;
+    -y)     handle_auto_mode; exit_code=$?;;
+    -u)     run_module "user" "ask"; exit_code=0 ;;
+    "")     handle_interactive_mode; exit_code=$? ;;
+    -i)     print_module_info "${2:-}"; exit_code=0 ;;
+    -r)     run_module "$(sanitize_module_name "${2:-}")" "force"; exit_code=$?;;
+    -dark)  handle_dark_mode; exit_code=$?;; 
+    *)      print_error "Unknown option: $arg1"; print_help; exit_code=1;;
+  esac
+
+  return $exit_code
+}
+
+# ==================================================================================
+# EXECUTION GUARD & CLEANUP
+# ==================================================================================
+
+# Only run main if script is executed, not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Set up error trapping
+    trap 'handle_unexpected_error' ERR
+    
+    # Execute main with all arguments
+    main "$@"
+    exit_code=$?
+    
+    # Final exit with proper code
+    exit $exit_code
+fi

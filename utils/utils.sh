@@ -15,14 +15,27 @@ print_msg()     { printf " - %s\n"   "$*"; }
 
 print_help() {
   cat <<'EOF'
-Usage: ./server_auto.sh [-y|-u|-r <module>|-l|-i <module>|-h]
-  -y            install all modules (no prompts); UFW first if missing
-  -u            run only the user module
-  -r <module>   reinstall a specific module (prompts if already installed)
-  -l            list available modules
-  -i <module>   show module description and installed status
-  -h            show this help
-  (no args)     interactive mode; UFW first if missing, then ask per module
+Usage: server_auto.sh [OPTION]
+
+Options:
+  -u               Run only the "user" module and exit
+  -y               Install all modules non-interactively (no prompts)
+  -r <module>      Install/reinstall only the specified module
+  -l               List available modules
+  -i <module>      Show module description and whether it's installed
+  -h               Show this help
+
+Behavior:
+  • Default (no flags): iterate modules, ASK before installing each.
+  • Module entrypoint files must be: modules/<name>/<name>_setup.sh
+  • Installed marker (stamp): modules/<name>/.installed
+  • Dependencies listed in: modules/<name>/requirements.txt
+
+Examples:
+  ./server_auto.sh -u
+  ./server_auto.sh -y
+  ./server_auto.sh -r ufw
+  ./server_auto.sh -i user
 EOF
 }
 
@@ -32,7 +45,6 @@ EOF
 UTILS_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
 UTILS_DIR="$(cd "$(dirname "$UTILS_REAL")" && pwd)"
 ROOT_DIR="$(cd "$UTILS_DIR/.." && pwd)"
-MODULES_DIR="$(cd "$(dirname "$ROOT_DIR/modules")" && pwd)"
 
 CONFIG_DIR="$ROOT_DIR/config"
 ENV_FILE="$CONFIG_DIR/.env"
@@ -116,7 +128,6 @@ get_conf_section() {
   ' "$CONF_FILE"
 }
 
-
 # Load required global scalars into env
 load_server_conf() {
   SSH_PORT_BOOTSTRAP="$(get_conf_value global SSH_PORT_BOOTSTRAP)"
@@ -143,6 +154,7 @@ write_ssh_bootstrap() {
   printf '%s\n' "$boot" | tee /etc/ssh/sshd_config.d/99-bootstrap.conf >/dev/null
 }
 
+# Write SSH secure config from server.conf
 write_ssh_secure() {
   local secure
   secure="$(render_vars "$(get_conf_section ssh.secure)")"
@@ -195,58 +207,32 @@ write_ufw_profiles() {
 # Write knockd.conf from [knockd.profile.*] (keeps %IP% intact)
 write_knockd_config() {
   local out="/etc/knockd.conf"
-  : > "$out.tmp"
+  local tmp outtmp
+  tmp="$(mktemp)" || { print_error "mktemp failed"; return 1; }
+  outtmp="${tmp}.out"
+
   awk '
-    /^\[[[:space:]]*knockd\.profile\.[^]]+\][[:space:]]*$/ { INSIDE=1; next }
-    /^\[/ && INSIDE { print ""; INSIDE=0 }
+    # [knockd.profile.NAME] -> print as [NAME]
+    /^\[[[:space:]]*knockd\.profile\.[^]]+\][[:space:]]*$/ {
+      name=$0
+      sub(/^\[[[:space:]]*knockd\.profile\./,"",name)
+      sub(/\][[:space:]]*$/,"",name)
+      if (printed) print ""
+      print "[" name "]"
+      printed=1; INSIDE=1; next
+    }
+    # new [section] closes current
+    /^\[[[:space:]]*[^]]+\][[:space:]]*$/ { INSIDE=0; next }
+    # copy body while inside a profile
     INSIDE { print }
-  ' "$CONF_FILE" > "$out.tmp"
-  mv -f "$out.tmp" "$out"
+  ' "$CONF_FILE" > "$tmp"
+
+  render_vars "$(cat "$tmp")" > "$outtmp" || { rm -f "$tmp" "$outtmp"; print_error "render_vars failed"; return 1; }
+  mv -f "$outtmp" "$out"
+  rm -f "$tmp"
   chmod 640 "$out"
   chown root:root "$out" 2>/dev/null || true
   print_success "Wrote knockd config -> $out"
-}
-
-# =================================================================================
-# Module management
-# =================================================================================
-
-
-valid_module() { [[ "$1" =~ ^[a-z0-9_-]+$ ]]; }
-
-is_installed() { [[ -f "$MODULES_DIR/$1/.installed" ]]; }
-
-clear_installed() { rm -f "$STAMP_DIR/$1.installed"; }
-
-module_exists() { [[ -f "$MODULES_DIR/$1/"$1"_setup.sh" ]]; }
-
-discover_modules() { find "$MODULES_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort ;}
-
-module_desc() { [[ -f "$MODULES_DIR/$1/description.txt" ]] && cat "$MODULES_DIR/$1/description.txt" || echo "$1 module";}
-
-mark_installed() {
-  local stamp
-  stamp="$(date '+%Y-%m-%d %H:%M:%S')"
-  echo "Installed: $stamp" > "$MODULES_DIR/$1/.installed"
-}
-
-module_reqs() {
-  local f="$MODULES_DIR/$1/requirements.txt"
-  [[ -f "$f" ]] || return 0
-  tr ' ' '\n' < "$f" | sed '/^$/d'
-}
-
-
-# =================================================================================
-# PKG management
-# =================================================================================
-install_pkg() {
-  [[ -n "$1" ]] || { print_error "install_pkg: missing package name"; return 1; }
-  [[ which "$1" &>/dev/null ]] && return 0
-  print_msg "Installing package: $1"
-  apt-get update -y
-  apt-get install -y "$1"
-  return $?
 }
 
 # #=============== Backups ===============================#

@@ -40,32 +40,6 @@ load_server_conf
 # Read UFW section from server.conf (fall back to sane defaults if absent)
 UFW_DEFAULT_INCOMING="$(get_conf_value ufw DEFAULT_INCOMING || true)"; UFW_DEFAULT_INCOMING="${UFW_DEFAULT_INCOMING:-drop}"
 UFW_DEFAULT_OUTGOING="$(get_conf_value ufw DEFAULT_OUTGOING || true)"; UFW_DEFAULT_OUTGOING="${UFW_DEFAULT_OUTGOING:-allow}"
-UFW_PACKAGES="$(get_conf_value ufw PACKAGES || true)"; UFW_PACKAGES="${UFW_PACKAGES:-ufw fail2ban}"
-
-# ----------------------------------------------------------------------------------
-# Packages (prompt before install)
-# ----------------------------------------------------------------------------------
-if [[ -n "${UFW_PACKAGES:-}" ]]; then
-  missing_pkgs=()
-  for pkg in ${UFW_PACKAGES}; do
-    dpkg -s "$pkg" &>/dev/null || missing_pkgs+=("$pkg")
-  done
-
-  if (( ${#missing_pkgs[@]} > 0 )); then
-    print_info "The following packages are missing: ${missing_pkgs[*]}"
-    read -rp "Proceed with installation of missing packages? (y/N): " ans; echo
-    if [[ $ans =~ $YES_REGEX ]]; then
-      for pkg in "${missing_pkgs[@]}"; do
-        install_pkg "$pkg"
-      done
-    else
-      print_error "Can't proceed without installing required packages. Exiting."
-      exit 1
-    fi
-  else
-    print_info "All required packages are already installed."
-  fi
-fi
 
 # ----------------------------------------------------------------------------------
 # Configure UFW defaults + MASTER_IP allow
