@@ -2,138 +2,156 @@
 set -euo pipefail
 
 # ==================================================================================
-# UFW MODULE — baseline firewall configuration
-# ==================================================================================
-# Expectations:
-# - Called by server_auto.sh (interactive or force mode)
-# - Loads SSH/ports/master IP and profiles from config/server.conf via utils.sh
-# - Secrets stay in config/.env (not used here)
-# - This script:
-#     1) Optionally installs packages (from [ufw] PACKAGES)
-#     2) Applies default policies and MASTER_IP allow-list
-#     3) Writes UFW app profiles from [ufw.profile.*]
-#     4) Enables UFW and configures rsyslog split logging
-#     5) (Optional) Installs knockd and writes [knockd.profile.*]
-#     6) (Optional) Enables unattended-upgrades (prompted)
+# UFW MODULE - Firewall Management
 # ==================================================================================
 
 # ----------------------------------------------------------------------------------
-# Locate project root and utils
+# Paths & Configuration
 # ----------------------------------------------------------------------------------
 SCRIPT_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
-ROOT_DIR="$(cd "$(dirname "$SCRIPT_REAL")"/../.. && pwd)"
+MODULE_DIR="$(cd "$(dirname "$SCRIPT_REAL")" && pwd)"
+ROOT_DIR="$(cd "$MODULE_DIR/../.." && pwd)"
 UTILS_DIR="$ROOT_DIR/utils"
 
-[ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
-
-if [[ -f "$UTILS_DIR/utils.sh" ]]; then
-  # shellcheck disable=SC1090
-  source "$UTILS_DIR/utils.sh"
-else
-  echo "utils.sh not found at $UTILS_DIR/utils.sh" >&2
-  exit 1
-fi
-
-# Load config (globals: MASTER_IP / ports); ufw specifics read below
-load_server_conf
-
-# Read UFW section from server.conf (fall back to sane defaults if absent)
-UFW_DEFAULT_INCOMING="$(get_conf_value ufw DEFAULT_INCOMING || true)"; UFW_DEFAULT_INCOMING="${UFW_DEFAULT_INCOMING:-drop}"
-UFW_DEFAULT_OUTGOING="$(get_conf_value ufw DEFAULT_OUTGOING || true)"; UFW_DEFAULT_OUTGOING="${UFW_DEFAULT_OUTGOING:-allow}"
-UFW_PACKAGES="$(get_conf_value ufw PACKAGES || true)"; UFW_PACKAGES="${UFW_PACKAGES:-ufw fail2ban}"
+UFW_CONFIG_DIR="$MODULE_DIR/ufw_config"
+STATE_FILE="$MODULE_DIR/.state"
+REGISTRY_FILE="$MODULE_DIR/.registry"
+BACKUP_DIR="$MODULE_DIR/backups"
 
 # ----------------------------------------------------------------------------------
-# Packages (prompt before install)
+# Core Functions
 # ----------------------------------------------------------------------------------
-if [[ -n "${UFW_PACKAGES:-}" ]]; then
-  missing_pkgs=()
-  for pkg in ${UFW_PACKAGES}; do
-    dpkg -s "$pkg" &>/dev/null || missing_pkgs+=("$pkg")
-  done
-
-  if (( ${#missing_pkgs[@]} > 0 )); then
-    print_info "The following packages are missing: ${missing_pkgs[*]}"
-    read -rp "Proceed with installation of missing packages? (y/N): " ans; echo
-    if [[ $ans =~ $YES_REGEX ]]; then
-      print_msg "Updating apt cache..."
-      apt-get update -y
-      print_msg "Installing packages..."
-      apt-get install -y "${missing_pkgs[@]}"
-      print_success "Packages installed."
-    else
-      print_error "Can't proceed without installing required packages. Exiting."
-      exit 1
+init_module() {
+    [ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
+    
+    if [[ ! -f "$UTILS_DIR/utils.sh" ]]; then
+        echo "utils.sh not found at $UTILS_DIR/utils.sh" >&2
+        exit 1
     fi
-  else
-    print_info "All required packages are already installed."
-  fi
+    source "$UTILS_DIR/utils.sh"
+    load_server_conf
+    
+    if [[ -z "${MASTER_IP:-}" ]]; then
+        print_error "MASTER_IP not configured in server.conf"
+        exit 1
+    fi
+    
+    mkdir -p "$BACKUP_DIR"
+}
+
+configure_base_ufw() {
+    ufw --force reset >/dev/null 2>&1 || true
+    ufw default deny incoming
+    ufw default allow outgoing
+    ufw allow from "$MASTER_IP"
+}
+
+###############!!!!!!!!!! fix !!!!!!!!!!###############
+write_ufw_profiles() {
+
+    # Create custom UFW profiles from server.conf
+    if command -v write_ufw_profiles >/dev/null 2>&1; then
+        write_ufw_profiles
+        print_success "UFW profiles written"
+    else
+        print_warning "write_ufw_profiles function not available in utils.sh"
+    fi
+}
+
+check_ufw_state() {
+    [[ -f "$STATE_FILE" ]] && [[ "$(< "$STATE_FILE")" =~ ^(open|close|ghost)$ ]] && return 0
+    rm -f "$STATE_FILE" 2>/dev/null
+    return 1
+}
+
+init_service_registry() {
+    if [[ ! -f "$REGISTRY_FILE" ]]; then
+        if [[ -f "$UFW_CONFIG_DIR/service_registry.conf" ]]; then
+            cp "$UFW_CONFIG_DIR/service_registry.conf" "$REGISTRY_FILE"
+        else
+            # Create minimal registry with simple echo
+            echo "ssh:SSH-Custom:base:SSH access" > "$REGISTRY_FILE"
+        fi
+    fi
+}
+
+select_initial_mode() {
+    echo "Select initial security mode:"
+    echo "1) OPEN   - Public services with fail2ban"
+    echo "2) CLOSE  - Hidden services with port knocking"  
+    echo "3) GHOST  - Complete invisibility (stealth)"
+    
+    while true; do
+        read -rp "Choose [1-3]: " choice
+        case "$choice" in
+            1) echo "open" > "$STATE_FILE"; apply_open_mode; break ;;
+            2) echo "close" > "$STATE_FILE"; apply_close_mode; break ;;
+            3) echo "ghost" > "$STATE_FILE"; apply_ghost_mode; break ;;
+            *) echo "Invalid choice. Enter 1, 2, or 3." ;;
+        esac
+    done
+}
+
+apply_open_mode() {
+    print_info "Applying OPEN mode configuration..."
+    
+    # Enable registered services using UFW profiles
+    while IFS=: read -r service profile module description; do
+        [[ -z "$service" || "$service" =~ ^# ]] && continue
+        ufw allow "$profile"
+        print_info "Enabled $service ($profile)"
+    done < "$REGISTRY_FILE"
+    
+    ufw --force enable
+    print_success "OPEN mode applied - services are publicly accessible"
+}
+
+apply_close_mode() {
+    print_info "Applying CLOSE mode configuration..."
+    # Only allow master IP, everything else requires knocking
+    ufw --force enable
+    print_success "CLOSE mode applied - ports hidden, knockd required"
+}
+
+apply_ghost_mode() {
+    print_info "Applying GHOST mode configuration..."
+    
+    # Apply custom before.rules for ghost mode
+    if [[ -f "$UFW_CONFIG_DIR/custom_before.rules" ]]; then
+        cp "$UFW_CONFIG_DIR/custom_before.rules" /etc/ufw/before.rules
+        # Replace placeholders
+        sed -i "s/{{MASTER_IP}}/$MASTER_IP/g" /etc/ufw/before.rules
+        sed -i "s/{{SSH_PORT}}/${SSH_PORT_FINAL:-42}/g" /etc/ufw/before.rules
+    fi
+    
+    ufw --force enable
+    print_success "GHOST mode applied - server is invisible"
+}
+
+# ----------------------------------------------------------------------------------
+# Main Function
+# ----------------------------------------------------------------------------------
+main() {
+    init_module
+    init_service_registry
+    
+    if check_ufw_state; then
+        configure_base_ufw
+        write_ufw_profiles
+        apply_selected_mode
+        print_success "UFW configuration verified ($(cat "$STATE_FILE") mode active)"
+    else
+        configure_base_ufw
+        write_ufw_profiles
+        select_initial_mode
+        apply_selected_mode
+        print_success "UFW initial setup completed ($(cat "$STATE_FILE") mode active)"
+    fi
+}
+
+# ----------------------------------------------------------------------------------
+# Execution Guard
+# ----------------------------------------------------------------------------------
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
 fi
-
-# ----------------------------------------------------------------------------------
-# Configure UFW defaults + MASTER_IP allow
-# ----------------------------------------------------------------------------------
-print_msg "Configuring UFW default policies..."
-ufw --force reset >/dev/null 2>&1 || true
-ufw default "${UFW_DEFAULT_INCOMING}" incoming
-ufw default "${UFW_DEFAULT_OUTGOING}" outgoing
-
-print_msg "Whitelisting management IP: ${MASTER_IP}"
-ufw allow from "${MASTER_IP}"
-
-# ----------------------------------------------------------------------------------
-# Write UFW application profiles from server.conf
-# ----------------------------------------------------------------------------------
-print_msg "Writing UFW application profiles from [ufw.profile.*]..."
-write_ufw_profiles
-
-# ----------------------------------------------------------------------------------
-# Enable UFW and configure logging
-# ----------------------------------------------------------------------------------
-print_msg "Enabling UFW (non-interactive)..."
-ufw --force enable
-
-print_msg "Configuring UFW logging via rsyslog..."
-rsys_conf="/etc/rsyslog.d/20-ufw.conf"
-cat > "$rsys_conf" <<'RSYS'
-# Log kernel-generated UFW messages to a dedicated file
-:msg, contains, "[UFW " /var/log/ufw.log
-& stop
-RSYS
-systemctl restart rsyslog
-
-# ----------------------------------------------------------------------------------
-# Optional: knockd (port knocking) — install + write [knockd.profile.*]
-# ----------------------------------------------------------------------------------
-read -rp "Do you want to configure knockd (port knocking)? (y/N): " ans; echo
-if [[ $ans =~ $YES_REGEX ]]; then
-  print_msg "Installing knockd..."
-  apt-get update -y
-  apt-get install -y knockd
-
-  print_msg "Writing /etc/knockd.conf from [knockd.profile.*]..."
-  write_knockd_config
-
-  systemctl enable knockd >/dev/null 2>&1 || true
-  systemctl restart knockd
-  print_msg "knockd installed and configured."
-else
-  print_info "Skipping knockd."
-fi
-
-# ----------------------------------------------------------------------------------
-# Optional: unattended-upgrades (prompted)
-# ----------------------------------------------------------------------------------
-read -rp "Enable unattended security upgrades (auto-reboot at 02:00)? (y/N): " ans; echo
-if [[ $ans =~ $YES_REGEX ]]; then
-  apt-get update -y
-  apt-get install -y unattended-upgrades
-  cat >/etc/apt/apt.conf.d/51auto-reboot <<'UPD'
-Unattended-Upgrade::Automatic-Reboot "true";
-Unattended-Upgrade::Automatic-Reboot-Time "02:00";
-UPD
-  print_success "Unattended upgrades enabled."
-else
-  print_info "Skipping unattended-upgrades."
-fi
-
-print_success "UFW setup complete."

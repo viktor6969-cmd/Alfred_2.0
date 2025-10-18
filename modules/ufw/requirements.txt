@@ -1,1 +1,4 @@
-# Needs to remain empty for now to avoid dependency issues
+# A list of packages required by the ufw module
+ufw 
+fail2ban
+knockd
