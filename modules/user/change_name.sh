@@ -10,8 +10,8 @@ set -euo pipefail
 # ==================================================================================
 
 SCRIPT_REAL="$(readlink -f "${BASH_SOURCE[0]}")"
-ROOT_DIR="$(cd "$(dirname "$SCRIPT_REAL")/../.." && pwd)"
-UTILS_DIR="$ROOT_DIR/utils"
+ROOT_DIR="$(cd "$(dirname "$SCRIPT_REAL")/.." && pwd)"
+UTILS_DIR="$ROOT_DIR/lib"
 
 [ "${EUID:-$(id -u)}" -eq 0 ] || { echo "Please run as root (sudo)."; exit 1; }
 

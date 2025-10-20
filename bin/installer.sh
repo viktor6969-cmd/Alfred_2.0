@@ -28,15 +28,43 @@ check_existing_installation() {
     fi
 }
 
+# Ensure jq is installed
+install_jq() {
+    if ! command -v jq &> /dev/null; then
+        print_info "Installing jq..."
+        if command -v apt-get &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+        elif command -v yum &> /dev/null; then
+            sudo yum install -y jq
+        else
+            print_error "Package manager not found. Please install jq manually."
+            exit 1
+        fi
+        print_success "jq installed successfully."
+    else
+        print_info "jq is already installed."
+    fi
+}
+
+# Initialize state for installer component
+initialize_state(){
+    local component="Installer"
+    print_debug "Initializing state for component: $component"
+    make_state "$component"
+    update_state "$component" "Installing system components"
+}
+
 # Create system directories for state and logs
 create_system_directories() {
+
     print_info "Creating system directories for state and logs..."
     
     # Runtime directory (PID files)
     create_directory "/var/run/alfred"
     
     # State directory (JSON state files)
-    create_directory "/var/lib/alfred/state/modules"
+    create_directory "/var/lib/alfred/state"
     
     # Log directory
     create_directory "/var/log/alfred"
@@ -46,39 +74,19 @@ create_system_directories() {
 
 # Install the main executable
 install_main_executable() {
+
     print_info "Installing Alfred main executable..."
-    
+    update_state "Installer" "Installing main executable"
     # Copy the existing alfred.sh to /usr/local/bin/alfred
     ln -sf "${PROJECT_DIR}/bin/alfred.sh" "${INSTALL_PREFIX}/bin/alfred"
-    
+    chmod +x "${INSTALL_PREFIX}/bin/alfred"
     print_success "Main executable installed"
-}
-
-# Create initial state files
-initialize_state() {
-    print_info "Initializing Alfred state..."
-    
-    local initial_state="/var/lib/alfred/state/installation.json"
-    local timestamp=$(get_timestamp)
-    local install_id=$(generate_id 16)
-    
-    printf '{
-        "alfred_version": "%s",
-        "installed_at": "%s",
-        "status": "installed",
-        "installation_id": "%s",
-        "project_directory": "%s",
-        "modules_installed": []
-    }' "$ALFRED_VERSION" "$timestamp" "$install_id" "$PROJECT_DIR" > "$initial_state"
-    
-    chmod 644 "$initial_state"
-    print_success "Initial state created"
 }
 
 # Create initial log file
 initialize_logging() {
     print_info "Setting up logging..."
-    
+    update_state "Installer" "Setting up logging system"
     touch /var/log/alfred/alfred.log
     chmod 644 /var/log/alfred/alfred.log
     
@@ -115,6 +123,7 @@ verify_installation() {
     
     if [[ $errors -eq 0 ]]; then
         print_success "Installation verified successfully"
+        update_state "Installer" "Installed"
         return 0
     else
         print_error "Installation verification failed with $errors error(s)"
@@ -128,12 +137,15 @@ main() {
     print_header "    Alfred Installer v${ALFRED_VERSION}"
     print_header "=========================================="
     
+    ######### ADD sudo apt install -y jq #########
+
     # Run installation steps
     check_root
     check_existing_installation
+    install_jq
+    initialize_state
     create_system_directories
     install_main_executable
-    initialize_state
     initialize_logging
     
     if verify_installation; then

@@ -13,37 +13,60 @@ CYAN='\033[0;36m'
 MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
-# Print functions
-print_info() { echo -e "${BLUE}[INFO]${NC} $1"; }
-print_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
+# Yes regex for confirmation prompts
+readonly YES_REGEX='^(yes|y|Y)$'
+# Debug mode
+readonly debug=0
+
+# =============================================================================
+# Print Functions
+# =============================================================================
+print_info() { echo -e "$1"; }
+print_success() { echo -e "${GREEN}[+]${NC} $1"; }
 print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
 print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
-print_debug() { echo -e "${CYAN}[DEBUG]${NC} $1"; }
-print_header() { echo -e "${MAGENTA}[ALFRED]${NC} $1"; }
-
-# Display post-installation information
-show_post_install_info() {
+print_debug() { [[ $debug -eq 1 ]] && echo -e "${CYAN}[-]${NC} $1"; } # Only print if debug mode is enabled
+print_header() {
+    echo -e "${BLUE}==============================${NC}"
+    echo -e "${BLUE}$1${NC}"
+    echo -e "${BLUE}==============================${NC}"
+}
+print_help() {
+    peint_logo
     echo
-    print_success "╔══════════════════════════════════════╗"
-    print_success "║          Alfred Installed!           ║"
-    print_success "╚══════════════════════════════════════╝"
+    priont_info "Alfred - Minimal System Setup"
     echo
-    echo "┌─ Commands ──────────────────────────────────┐"
-    echo "│  install <module>    Install a module       │"
-    echo "│  remove <module>     Remove a module        │"
-    echo "│  list                Show available modules │"
-    echo "│  status              Show installation      │"
-    echo "└─────────────────────────────────────────────┘"
-    echo
-    echo "┌─ Important Paths ───────────────────────────┐"
-    echo "│  Project:   ${PROJECT_DIR}│"
-    echo "│  State:     /var/lib/alfred/state/          │"
-    echo "│  Logs:      /var/log/alfred/                │"
-    echo "└─────────────────────────────────────────────┘"
-    echo
-    print_warning "Note: Keep project directory intact"
+}
+print_logo(){
+    echo -e "
+  ___  _  __              _   _____  _____ 
+ / _ \| |/ _|            | | / __  \|  _  |
+/ /_\ \ | |_ _ __ ___  __| | `' / /'| |/' |
+|  _  | |  _| '__/ _ \/ _` |   / /  |  /| |
+| | | | | | | | |  __/ (_| | ./ /___\ |_/ /
+\_| |_/_|_| |_|  \___|\__,_| \_____(_)___/ 
+    "
 }
 
+# =============================================================================
+# Input Validation Functions
+# =============================================================================
+
+# Validate component name (safe for filenames)
+validate_component_name() {
+    local component="$1"
+    [[ -n "$component" && "$component" =~ ^[a-zA-Z0-9_-]+$ ]]
+}
+
+# Validate port number
+validate_port() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] && (( port >= 1 && port <= 65535 ))
+}
+
+# =============================================================================
+# Action Functions
+# =============================================================================
 
 # Check if running as root
 check_root() {
@@ -72,7 +95,7 @@ validate_directory() {
     return 0
 }
 
-# Create directory with proper permissions
+# Create directory if it doesn't exist
 create_directory() {
     local dir="$1"
     local permissions="${2:-755}"
@@ -82,59 +105,11 @@ create_directory() {
         chmod "$permissions" "$dir"
         print_debug "Created directory: $dir"
     else
-        print_debug "Directory already exists: $dir"
+         print_debug "Directory already exists: $dir"
     fi
 }
 
-# Get current timestamp
-get_timestamp() {
-    date -Iseconds
-}
-
-
-
-
-# Generate a random string
-generate_id() {
-    local length="${1:-8}"
-    tr -dc 'a-zA-Z0-9' < /dev/urandom | head -c "$length"
-}
-
-# Confirm action with user
-confirm_action() {
-    local message="$1"
-    local default="${2:-n}"
-    
-    if [[ "$default" == "y" ]]; then
-        read -rp "$message (Y/n): " -n 1 -r
-        echo
-        [[ $REPLY =~ ^[Nn]$ ]] && return 1
-    else
-        read -rp "$message (y/N): " -n 1 -r
-        echo
-        [[ $REPLY =~ ^[Yy]$ ]] && return 0
-    fi
-    return 1
-}
-
-# Wait for process to complete
-wait_for_process() {
-    local pid="$1"
-    local timeout="${2:-30}"
-    local count=0
-    
-    while kill -0 "$pid" 2>/dev/null; do
-        sleep 1
-        ((count++))
-        if [[ $count -gt $timeout ]]; then
-            print_error "Process $pid timed out after $timeout seconds"
-            return 1
-        fi
-    done
-    return 0
-}
-
-# Source a file if it exists
+# Safely source a file if it exists
 safe_source() {
     local file="$1"
     if [[ -f "$file" && -r "$file" ]]; then
@@ -144,6 +119,17 @@ safe_source() {
         print_debug "File not found or not readable: $file"
         return 1
     fi
+}
+# Get current timestamp
+get_timestamp() {
+    date -Iseconds
+}
+
+# Confirm action with user
+confirm_action() {
+    local message="$1"   
+    read -rp "$message (y/N): " ans; echo
+    [[ $ans =~ ^[Yy]$ ]] && return 0 || return 1
 }
 
 # Validate file exists and is readable
@@ -158,4 +144,117 @@ validate_file() {
         return 1
     fi
     return 0
+}
+
+
+# =============================================================================
+# PID Management Functions
+# =============================================================================
+
+# Create PID file and check for existing process
+make_pid() {
+    local component="$1"
+    local pid_dir="/var/run/alfred"
+    local pid_file="${pid_dir}/${component}.pid"
+    
+    create_directory "$pid_dir" "755"
+    
+    if is_running_pid "$component"; then
+        print_error "$component is already running"
+        return 1
+    fi
+    
+    # Create PID file
+    echo $$ > "$pid_file"
+    print_debug "Created PID file: $pid_file"
+    return 0
+}
+
+# Remove PID file
+relise_pid() {
+    local component="$1"
+    local pid_file="/var/run/alfred/${component}.pid"
+    
+    if [[ -f "$pid_file" ]]; then
+        rm -f "$pid_file"
+        print_debug "PID file removed: $pid_file"
+    fi
+}
+
+# Check if component is running
+is_running_pid() {
+    local component="$1"
+    local pid_file="/var/run/alfred/${component}.pid"
+    
+    if [[ -f "$pid_file" ]]; then
+        local pid
+        pid=$(cat "$pid_file")
+        if kill -0 "$pid" 2>/dev/null; then
+            return 0
+        else
+            # Process is dead, clean up stale PID file
+            rm -f "$pid_file"
+        fi
+    fi
+    return 1
+}
+
+
+# =============================================================================
+# JSON State Management Functions
+# =============================================================================
+
+# Initialize state file for a component
+make_state() {
+    local component="$1"
+    local state_dir="/var/lib/alfred/state"
+    local state_file="${state_dir}/${component}.json"
+    
+    create_directory "$state_dir" "700"
+    
+    if [[ ! -f "$state_file" ]]; then
+        cat > "$state_file" << EOF
+{
+    "component": "$component",
+    "status": "not_started",
+    "created_at": "$(get_timestamp)",
+    "last_updated": "$(get_timestamp)"
+}
+EOF
+        chmod 600 "$state_file"
+        print_debug "Initialized state file: $state_file"
+    fi
+}
+
+# Update state file with new status
+update_state() { # {$1 component} {$2 status}
+    local component="$1"
+    local status="$2"
+    local state_file="/var/lib/alfred/state/${component}.json"
+    
+    if command_exists jq && [[ -f "$state_file" ]]; then
+        jq ".status = \"$status\" | .last_updated = \"$(get_timestamp)\"" "$state_file" > "$state_file.tmp" && mv "$state_file.tmp" "$state_file"
+        print_debug "Updated state for $component: $status"
+    fi
+}
+
+# Read value from state file
+read_state() {
+    local component="$1"
+    local key="$2"
+    local state_file="/var/lib/alfred/state/${component}.json"
+    
+    if command_exists jq && [[ -f "$state_file" ]]; then
+        jq -r ".${key}" "$state_file" 2>/dev/null
+    fi
+}
+
+# Check if component is in specific state
+check_state() {
+    local component="$1"
+    local expected_status="$2"
+    
+    local current_status
+    current_status=$(read_state "$component" "status")
+    [[ "$current_status" == "$expected_status" ]]
 }
