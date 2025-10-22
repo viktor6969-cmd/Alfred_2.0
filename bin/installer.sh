@@ -43,7 +43,7 @@ install_jq() {
         fi
         print_success "jq installed successfully."
     else
-        print_info "jq is already installed."
+        print_debug "jq is already installed."
     fi
 }
 
@@ -133,9 +133,8 @@ verify_installation() {
 
 # Main installation function
 main() {
-    print_header "=========================================="
-    print_header "    Alfred Installer v${ALFRED_VERSION}"
-    print_header "=========================================="
+    print_logo
+    print_info "Starting Alfred v${ALFRED_VERSION} installation..."
     
     ######### ADD sudo apt install -y jq #########
 
@@ -143,13 +142,15 @@ main() {
     check_root
     check_existing_installation
     install_jq
+    print_debug "jq installation step completed"
     initialize_state
     create_system_directories
     install_main_executable
     initialize_logging
     
     if verify_installation; then
-        show_post_install_info
+        print_success "Alfred v${ALFRED_VERSION} installed successfully!"
+        exit 0
     else
         print_error "Installation completed with errors. Please check the output above."
         exit 1
