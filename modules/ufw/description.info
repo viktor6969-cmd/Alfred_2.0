@@ -1,0 +1,16 @@
+name: UFW Firewall
+description: Uncomplicated Firewall - simple firewall configuration tool
+version: 1.0
+author: Alfred System
+category: security
+
+Features:
+  - Enable basic firewall
+  - Allow SSH connections
+  - Deny all other incoming traffic
+  - Simple management interface
+
+Notes:
+  - Requires root privileges
+  - Will block all incoming traffic except SSH
+  - Default outgoing traffic is allowed
