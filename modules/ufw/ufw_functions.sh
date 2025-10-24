@@ -115,7 +115,7 @@ setup_knockd() { # {$1 = <action: start|stop>} - Control knockd service
     
     case "$action" in
         "start")
-            systemctl is-active --quiet knockd && {print_debug "Knockd is already runing" ; return 0; }
+            systemctl is-active --quiet knockd && { print_debug "Knockd is already runing" ; return 0; }
             print_info "Starting knockd service..."
             systemctl enable knockd
             systemctl start knockd
@@ -149,30 +149,34 @@ setup_knockd() { # {$1 = <action: start|stop>} - Control knockd service
 }
 
 get_ufw_status() { # {no args} - Get comprehensive UFW status information
-    print_header "UFW Firewall Status"
+    print_header "  UFW Firewall Status"
     
     # Basic UFW status
     echo "=== UFW Status ==="
     if ufw status | grep -q "Status: active"; then
-        print_success "UFW: ACTIVE"
+        print_info "UFW: $GREEN [ACTIVE] $NC"
         ufw status verbose | grep -v "^\s*$"
     else
-        print_warning "UFW: INACTIVE"
+        print_info "UFW: $RED [INACTIVE] $NC"
     fi
     echo
     
     # Current profile from state
     local current_profile=$(get_state_value "ufw" "current_profile" "not set")
     echo "=== Current Profile ==="
-    echo "Profile: $current_profile"
+    if [[ $current_profile == "not set" ]]; then
+        print_info "Profile is $RED UNSET $NC"
+    else
+        print_info "Profile: $current_profile"
+    fi
     echo
     
     # Installed applications
     echo "=== Installed Applications ==="
     local installed_apps=$(get_state_value "ufw" "installed_apps" "")
-    if [[ -n "$installed_apps" ]]; then
-        echo "$installed_apps" | tr ',' '\n' | while read app; do
-            echo "• $app"
+    if [[ -n "$installed_apps" && ! "$installed_apps"=="[]" ]]; then
+        print_info "$installed_apps" | tr ',' '\n' | while read app; do
+            print_info "• $app"
         done
     else
         echo "No applications configured"
@@ -182,15 +186,30 @@ get_ufw_status() { # {no args} - Get comprehensive UFW status information
     # Knockd status
     echo "=== Knockd Status ==="
     if systemctl is-active --quiet knockd 2>/dev/null; then
-        print_success "Knockd: ACTIVE"
+        print_info "Knockd:${GREEN}[ACTIVE]${NC}"
         systemctl status knockd --no-pager -l | head -10
     else
-        print_warning "Knockd: INACTIVE"
+        print_info "Knockd:${RED}[INACTIVE]${NC}"
     fi
     echo
     
     # Module state
     echo "=== Module State ==="
     local module_state=$(get_state_value "ufw" "status" "unknown")
-    echo "Module: $module_state"
+    [[ $module_state == "installed" ]] && print_info "${GREEN}[Installed]${NC}" || print_info "${RED}[$module_state]${NC}
+}
+
+get_state_value() { # {$1 = <component>} {$2 = <key>} {$3 = <default>} - Get value from state
+    local component="$1"
+    local key="$2"
+    local default="$3"
+    local state_file="/var/lib/alfred/state/${component}.json"
+    
+    if [[ -f "$state_file" ]] && command -v jq &> /dev/null; then
+        local value
+        value=$(jq -r ".${key} // \"$default\"" "$state_file" 2>/dev/null)
+        echo "$value"
+    else
+        echo "$default"
+    fi
 }

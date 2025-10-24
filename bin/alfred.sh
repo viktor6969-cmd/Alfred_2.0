@@ -287,7 +287,17 @@ main() { # {$@ = <command> <args>} - Main command handler
                 print_info "Module is not installed: $module"
             fi
             exit_code=0
+            ;;
 
+    --ufw) 
+            local mode="$arg"
+            if [[ -z "$mode" ]]; then
+                print_error "UFW profile is missing!"
+                echo "Usage: alfred --ufw (open|close|hide)"
+                exit_code=0
+            fi
+            check_state "$module" "installed" || {print_error "Ufw module is not installed, pleace run alfred --install ufw" ; return 0}
+            set_profile "mode" && print_success "Curent rofile changed to $mod" || print_error "Failed to cahnge the profile" 
             ;;
 
     *)      print_error "Unknown option: $command"; print_help; exit_code=0;;

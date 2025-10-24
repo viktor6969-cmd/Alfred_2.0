@@ -14,7 +14,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Yes regex for confirmation prompts
-readonly YES_REGEX='^(yes|y|Y)$'
+YES_REGEX='^(yes|y|Y)$'
 # Debug mode
 readonly debug=1
 
@@ -542,7 +542,7 @@ get_ufw_profiles() { # {$1 = <config_file>} - Extract all UFW profiles (sections
 setup_app_profiles() { # {no args} - Create single UFW profiles file
     print_info "Setting up UFW application profiles..."
     
-    local ufw_conf="$ALFRED_ROOT/config/ufw.conf"
+    local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
     local ufw_apps_dir="/etc/ufw/applications.d"
     local output_file="$ufw_apps_dir/alfred_profiles"
     
@@ -565,7 +565,7 @@ setup_app_profiles() { # {no args} - Create single UFW profiles file
     
     # Write all profiles to single file
     echo "$resolved_content" > "$output_file"
-        
+
     if [[ $? -eq 0 ]]; then
         # Count how many profiles were created
         local profile_count=$(grep -c "^\[.*\]$" "$output_file" 2>/dev/null || echo "0")
