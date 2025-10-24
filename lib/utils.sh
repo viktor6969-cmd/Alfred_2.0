@@ -16,15 +16,15 @@ NC='\033[0m' # No Color
 # Yes regex for confirmation prompts
 readonly YES_REGEX='^(yes|y|Y)$'
 # Debug mode
-readonly debug=0
+readonly debug=1
 
 # =============================================================================
 # Print Functions
 # =============================================================================
 print_info() { echo -e "$1"; }
 print_success() { echo -e "${GREEN}[+]${NC} $1"; }
-print_warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
-print_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+print_warning() { echo -e "${YELLOW}[!]${NC} WARNING: ${NC} $1"; }
+print_error() { echo -e "${RED}[-]${NC} ERROR:  $1"; }
 print_debug() { [[ $debug -eq 1 ]] && echo -e "${CYAN}[-]${NC} $1"; } # Only print if debug mode is enabled
 print_header() {
     echo -e "=============================="
@@ -46,6 +46,7 @@ Options:
   -u, --user          Run only the user module
   --install MODULE    Install a specific module
   --remove MODULE     Remove a specific module
+  --status MODULE     Show installation status of a specific module
   --reinstall MODULE  Reinstall a specific module
 
 Examples:
@@ -294,7 +295,7 @@ init_module_state() { # {$1 = <component>} {$2 = <json_data>}
 update_state() { # {$1 = <component>} {$2 = <key>} {$3 = <value>} - Update specific key in state file
     local component="$1"
     local key="$2"
-    local value="$3"
+    local value="${3:-}"  # Default to empty string if not provided
     local state_file="/var/lib/alfred/state/${component}.json"
     
     if command_exists jq && [[ -f "$state_file" ]]; then
@@ -327,7 +328,6 @@ update_state() { # {$1 = <component>} {$2 = <key>} {$3 = <value>} - Update speci
             print_error "Failed to update state: $component.$key"
             return 1
         fi
-    else
         
     fi
 }
@@ -355,118 +355,257 @@ check_state() {
 
 
 # =============================================================================
-# Backup Functions  
+# Backup Functions
 # =============================================================================
 
-create_backup() { # {$1 = <component>} {$2 = <file_path>} - Create backup of file with timestamp
-    local component="$1"
-    local file_path="$2"
-    local backup_dir="/var/lib/alfred/backups/$component"
+create_backup() { # {$1 = <module_name>} {$2 = <file_or_directory_path>} - Create backup of file or directory
+    local module="$1"
+    local source_path="$2"
+    local backup_dir="/var/lib/alfred/backups/$module"
+    local timestamp=$(date +%Y%m%d_%H%M%S)
     
-    if [[ ! -f "$file_path" ]]; then
-        print_debug "File not found, skipping backup: $file_path"
-        return 1
-    fi
+    # Create backup directory if it doesn't exist
+    mkdir -p "$backup_dir"
     
-    create_directory "$backup_dir" "700"
-    
-    local filename
-    filename=$(basename "$file_path")
-    local timestamp
-    timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_file="$backup_dir/${filename}.${timestamp}.bak"
-    
-    if cp "$file_path" "$backup_file"; then
-        print_debug "Backup created: $backup_file"
+    if [[ ! -e "$source_path" ]]; then
+        print_debug "Source path does not exist, nothing to backup: $source_path"
         return 0
-    else
-        print_error "Failed to create backup: $file_path"
-        return 1
-    fi
-}
-
-restore_backup() { # {$1 = <component>} {$2 = <file_path>} {$3 = <backup_timestamp> (optional)} - Restore file from backup
-    local component="$1"
-    local file_path="$2"
-    local timestamp="$3"
-    local backup_dir="/var/lib/alfred/backups/$component"
-    
-    if [[ ! -d "$backup_dir" ]]; then
-        print_error "No backups found for component: $component"
-        return 1
     fi
     
-    local filename
-    filename=$(basename "$file_path")
-    local backup_file
-    
-    if [[ -n "$timestamp" ]]; then
-        # Restore specific backup
-        backup_file="$backup_dir/${filename}.${timestamp}.bak"
-        if [[ ! -f "$backup_file" ]]; then
-            print_error "Specific backup not found: $backup_file"
+    local backup_name
+    if [[ -d "$source_path" ]]; then
+        # Directory backup
+        backup_name="$(basename "$source_path")_${timestamp}.tar.gz"
+        if tar -czf "$backup_dir/$backup_name" -C "$(dirname "$source_path")" "$(basename "$source_path")" 2>/dev/null; then
+            print_debug "Backup created: $backup_dir/$backup_name"
+            return 0
+        else
+            print_warning "Failed to create backup of directory: $source_path"
             return 1
         fi
     else
-        # Restore latest backup
-        backup_file=$(find "$backup_dir" -name "${filename}.*.bak" | sort -r | head -1)
-        if [[ -z "$backup_file" ]]; then
-            print_error "No backups found for file: $filename"
+        # File backup
+        backup_name="$(basename "$source_path")_${timestamp}.bak"
+        if cp "$source_path" "$backup_dir/$backup_name" 2>/dev/null; then
+            print_debug "Backup created: $backup_dir/$backup_name"
+            return 0
+        else
+            print_warning "Failed to create backup of file: $source_path"
             return 1
         fi
     fi
+}
+
+restore_backup() { # {$1 = <module_name>} {$2 = <file_or_directory_path>} - Restore latest backup
+    local module="$1"
+    local target_path="$2"
+    local backup_dir="/var/lib/alfred/backups/$module"
     
-    # Create directory for target file if it doesn't exist
-    local target_dir
-    target_dir=$(dirname "$file_path")
-    create_directory "$target_dir" "755"
+    if [[ ! -d "$backup_dir" ]]; then
+        print_debug "No backup directory found for module: $module"
+        return 1
+    fi
     
-    if cp "$backup_file" "$file_path"; then
-        print_success "Backup restored: $file_path"
+    local basename_target="$(basename "$target_path")"
+    local latest_backup=""
+    
+    # Find the latest backup for this target
+    if [[ -d "$target_path" ]]; then
+        # Looking for directory backups (tar.gz files)
+        latest_backup=$(find "$backup_dir" -name "${basename_target}_*.tar.gz" -type f | sort -r | head -n1)
+    else
+        # Looking for file backups (.bak files)
+        latest_backup=$(find "$backup_dir" -name "${basename_target}_*.bak" -type f | sort -r | head -n1)
+    fi
+    
+    if [[ -z "$latest_backup" ]]; then
+        print_warning "No backup found for: $target_path"
+        return 1
+    fi
+    
+    print_info "Restoring from backup: $(basename "$latest_backup")"
+    
+    if [[ -d "$target_path" ]]; then
+        # Restore directory
+        if [[ -d "$target_path" ]]; then
+            rm -rf "$target_path"
+        fi
+        if tar -xzf "$latest_backup" -C "$(dirname "$target_path")" 2>/dev/null; then
+            print_debug "Directory restored: $target_path"
+            return 0
+        else
+            print_error "Failed to restore directory from backup: $latest_backup"
+            return 1
+        fi
+    else
+        # Restore file
+        if cp "$latest_backup" "$target_path" 2>/dev/null; then
+            print_debug "File restored: $target_path"
+            return 0
+        else
+            print_error "Failed to restore file from backup: $latest_backup"
+            return 1
+        fi
+    fi
+}
+
+cleanup_backups() { # {$1 = <module_name>} {$2 = <keep_count> (optional, default: 5)} - Cleanup old backups, keep only specified number
+    local module="$1"
+    local keep_count="${2:-5}"
+    local backup_dir="/var/lib/alfred/backups/$module"
+    
+    if [[ ! -d "$backup_dir" ]]; then
+        return 0
+    fi
+    
+    # Remove old backups, keeping only the most recent ones
+    local files_count=$(find "$backup_dir" -type f | wc -l)
+    
+    if [[ $files_count -gt $keep_count ]]; then
+        find "$backup_dir" -type f -printf "%T@ %p\n" | sort -n | head -n -$keep_count | cut -d' ' -f2- | while read -r old_backup; do
+            rm -f "$old_backup"
+            print_debug "Removed old backup: $(basename "$old_backup")"
+        done
+    fi
+}
+
+# =============================================================================
+# INI File Parsing Functions
+# =============================================================================
+
+# Get a specific profile section with header
+get_profile() { # {$1 = <profile_name>} {$2 = <config_file>} - Extract profile section with header
+    local profile_name="$1"
+    local config_file="$2"
+    
+    if [[ ! -f "$config_file" ]]; then
+        print_error "Config file not found: $config_file"
+        return 1
+    fi
+    
+    # Use awk to extract the specific profile section
+    awk -v profile="$profile_name" '
+        /^[[:space:]]*#/ { next }  # Skip comment lines
+        /^[[:space:]]*$/ { next }  # Skip empty lines
+        
+        /^\[.*\]$/ {
+            if (found) { exit }
+            current_section = substr($0, 2, length($0)-2)  # Remove brackets
+            if (current_section == profile) {
+                found = 1
+                print $0  # Print the section header
+            }
+            next
+        }
+        
+        found { print }
+    ' "$config_file"
+}
+
+# Get all UFW profiles from config file
+get_ufw_profiles() { # {$1 = <config_file>} - Extract all UFW profiles (sections without dots)
+    local config_file="$1"
+    
+    if [[ ! -f "$config_file" ]]; then
+        print_error "Config file not found: $config_file"
+        return 1
+    fi
+    
+    # Use awk to extract all simple sections (no dots in name)
+    awk '
+        /^[[:space:]]*#/ { next }  # Skip comment lines
+        /^[[:space:]]*$/ { next }  # Skip empty lines
+        
+        /^\[.*\]$/ {
+            # Extract section name without brackets
+            section_name = substr($0, 2, length($0)-2)
+            
+            # Only process sections without dots (simple UFW profiles)
+            if (section_name !~ /\./) {
+                # If we were already collecting a profile, add newline separator
+                if (collecting) {
+                    print ""  # Add blank line between profiles
+                }
+                collecting = 1
+                print $0  # Print section header
+            } else {
+                collecting = 0  # Stop collecting for sections with dots
+            }
+            next
+        }
+        
+        collecting { print }
+    ' "$config_file"
+}
+
+# Setup application profiles from ufw.conf
+setup_app_profiles() { # {no args} - Create single UFW profiles file
+    print_info "Setting up UFW application profiles..."
+    
+    local ufw_conf="$ALFRED_ROOT/config/ufw.conf"
+    local ufw_apps_dir="/etc/ufw/applications.d"
+    local output_file="$ufw_apps_dir/alfred_profiles"
+    
+    if [[ ! -f "$ufw_conf" ]]; then
+        print_warning "UFW configuration file not found: $ufw_conf"
+        return 1
+    fi
+    
+    # Create applications directory if it doesn't exist
+    mkdir -p "$ufw_apps_dir"
+    
+    # Get all UFW profiles
+    local profiles_content
+    profiles_content=$(get_ufw_profiles "$ufw_conf")
+    
+    if [[ -z "$profiles_content" ]]; then
+        print_warning "No UFW profiles found in configuration"
+        return 0
+    fi
+    
+    # Write all profiles to single file
+    echo "$resolved_content" > "$output_file"
+        
+    if [[ $? -eq 0 ]]; then
+        # Count how many profiles were created
+        local profile_count=$(grep -c "^\[.*\]$" "$output_file" 2>/dev/null || echo "0")
+        print_success "Created $profile_count UFW profiles in: $output_file"
         return 0
     else
-        print_error "Failed to restore backup: $file_path"
+        print_error "Failed to create UFW profiles file: $output_file"
         return 1
     fi
 }
 
-list_backups() { # {$1 = <component>} - List available backups for component
-    local component="$1"
-    local backup_dir="/var/lib/alfred/backups/$component"
+setup_knockd_config() { # {no args} - Setup knockd configuration during installation
+    print_info "Setting up knockd configuration..."
     
-    if [[ ! -d "$backup_dir" ]]; then
-        print_error "No backups found for component: $component"
-        return 1
-    fi
+    local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
     
-    print_header "Backups for: $component"
-    find "$backup_dir" -name "*.bak" | sort -r | while read -r backup; do
-        local size
-        size=$(du -h "$backup" | cut -f1)
-        local date
-        date=$(stat -c %y "$backup" | cut -d' ' -f1)
-        local time
-        time=$(stat -c %y "$backup" | cut -d' ' -f2 | cut -d'.' -f1)
-        echo -e "  • $(basename "$backup") - ${size} - ${date} ${time}"
-    done
-}
-
-clean_old_backups() { # {$1 = <component>} {$2 = <days_to_keep>} - Remove backups older than specified days
-    local component="$1"
-    local days_to_keep="${2:-30}"
-    local backup_dir="/var/lib/alfred/backups/$component"
+    # Extract all knockd configurations from ufw.conf
+    local knockd_config
+    knockd_config=$(awk '
+        /^[[:space:]]*#/ { next }
+        /^[[:space:]]*$/ { next }
+        
+        /^\[knockd\./ {
+            collecting = 1
+            print $0
+            next
+        }
+        
+        /^\[.*\]$/ && !/^\[knockd\./ {
+            collecting = 0
+            next
+        }
+        
+        collecting { print }
+    ' "$ufw_conf")
     
-    if [[ ! -d "$backup_dir" ]]; then
-        print_debug "No backups found for component: $component"
-        return 0
-    fi
-    
-    local deleted_count
-    deleted_count=$(find "$backup_dir" -name "*.bak" -mtime "+$days_to_keep" -delete -print | wc -l)
-    
-    if [[ $deleted_count -gt 0 ]]; then
-        print_info "Removed $deleted_count backups older than $days_to_keep days for: $component"
+    if [[ -n "$knockd_config" ]]; then
+        echo "$knockd_config" > /etc/knockd.conf
+        print_success "Knockd configuration created"
     else
-        print_debug "No old backups found for: $component"
+        print_warning "No knockd configuration found in ufw.conf"
     fi
 }
