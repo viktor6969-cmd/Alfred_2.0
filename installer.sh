@@ -10,7 +10,7 @@ set -euo pipefail
 readonly ALFRED_NAME="alfred"
 readonly ALFRED_VERSION="1.0.0"
 readonly INSTALL_PREFIX="/usr/local"
-readonly PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Source utilities
 source "${PROJECT_DIR}/lib/utils.sh"
@@ -52,7 +52,7 @@ initialize_state(){
     local component="Installer"
     print_debug "Initializing state for component: $component"
     make_state "$component"
-    update_state "$component" "Installing system components"
+    update_state "$component" "state" "Installing system components"
 }
 
 # Create system directories for state and logs
