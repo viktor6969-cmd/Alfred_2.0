@@ -260,9 +260,9 @@ main() { # {$@ = <command> <args>} - Main command handler
             fi
             ;;
  
-    --reload-profiles)
+    reload-profiles)
             print_info "Reloading UFW application profiles..."
-            if setup_app_profiles; then
+            if load_ufw_profiles; then
                 print_success "UFW application profiles reloaded successfully"
                 return 0
             else
@@ -294,12 +294,16 @@ main() { # {$@ = <command> <args>} - Main command handler
             if [[ -z "$mode" ]]; then
                 print_error "UFW profile is missing!"
                 echo "Usage: alfred --ufw (open|close|hide)"
-                exit_code=0
+                exit 0
             fi
-            check_state "$module" "installed" || {print_error "Ufw module is not installed, pleace run alfred --install ufw" ; return 0}
-            set_profile "mode" && print_success "Curent rofile changed to $mod" || print_error "Failed to cahnge the profile" 
+            check_state "ufw" "installed" || { print_error "Ufw module is not installed, pleace run alfred --install ufw" ; return 0; }
+            set_profile "$mode" && print_success "Curent rofile changed to $mod" || print_error "Failed to cahnge the profile" 
             ;;
 
+    get) 
+            local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
+            echo "$(load_app_profiles "ufw" "$ufw_conf")" ;;
+            
     *)      print_error "Unknown option: $command"; print_help; exit_code=0;;
   esac 
   return $exit_code

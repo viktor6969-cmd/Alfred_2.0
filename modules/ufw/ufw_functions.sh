@@ -109,6 +109,117 @@ set_hidden_profile() { # {no args} - Set hidden profile (placeholder)
 # ============================================================================
 # Util finctions
 # ============================================================================
+load_ufw_profiles() { # {no args} - Create UFW applications.d file with Alfred profiles
+    print_info "Loading UFW application profiles..."
+    
+    local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
+    local ufw_apps_dir="/etc/ufw/applications.d"
+    local output_file="$ufw_apps_dir/alfred_profiles"
+    
+    if [[ ! -f "$ufw_conf" ]]; then
+        print_error "UFW configuration file not found: $ufw_conf"
+        return 1
+    fi
+    
+    # Create applications directory if it doesn't exist
+    mkdir -p "$ufw_apps_dir"
+    
+    # Get UFW profiles using load_app_profiles
+    local profiles_content
+    profiles_content=$(load_app_profiles "ufw" "$ufw_conf")
+    
+    if [[ -z "$profiles_content" ]]; then
+        print_warning "No UFW profiles found in configuration"
+        # Create empty file to avoid errors
+        touch "$output_file"
+        return 0
+    fi
+    
+    # Replace template variables
+    local resolved_content="$profiles_content"
+    if [[ "$resolved_content" == *"{{SSH_PORT_BOOTSTRAP}}"* ]]; then
+        local ssh_port=$(get_config_value "server" "ssh_port" "22")
+        resolved_content="${resolved_content//\{\{SSH_PORT_BOOTSTRAP\}\}/$ssh_port}"
+        print_debug "Resolved SSH port to: $ssh_port in profiles"
+    fi
+    
+    # Write all profiles to the single file
+    echo "$resolved_content" > "$output_file"
+    
+    if [[ $? -eq 0 ]]; then
+        local profile_count=$(grep -c "^\[.*\]$" "$output_file" 2>/dev/null || echo "0")
+        print_success "Loaded $profile_count UFW profiles to: $output_file"
+        return 0
+    else
+        print_error "Failed to create UFW profiles file: $output_file"
+        return 1
+    fi
+}
+
+get_config_value() { # {$1 = <section>} {$2 = <key>} {$3 = <default>} - Get value from server config
+    local section="$1"
+    local key="$2"
+    local default="$3"
+    local config_file="$ALFRED_ROOT/etc/server.conf"
+    
+    if [[ ! -f "$config_file" ]]; then
+        echo "$default"
+        return 0
+    fi
+    
+    # Use awk to extract the value
+    local value
+    value=$(awk -F= -v section="$section" -v key="$key" '
+        /^\[.*\]$/ {
+            current_section = substr($0, 2, length($0)-1)
+        }
+        current_section == section && $1 == key {
+            print $2
+            exit
+        }
+    ' "$config_file")
+    
+    if [[ -n "$value" ]]; then
+        echo "$value"
+    else
+        echo "$default"
+    fi
+}
+
+load_knockd_profiles() { # {no args} - Create knockd.conf file with Alfred profiles
+    print_info "Loading knockd configuration..."
+    
+    local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
+    local output_file="/etc/knockd.conf"
+    
+    if [[ ! -f "$ufw_conf" ]]; then
+        print_error "UFW configuration file not found: $ufw_conf"
+        return 1
+    fi
+    
+    # Get knockd profiles using load_app_profiles
+    local knockd_config
+    knockd_config=$(load_app_profiles "knockd" "$ufw_conf")
+    
+    if [[ -z "$knockd_config" ]]; then
+        print_warning "No knockd profiles found in configuration"
+        # Remove existing file if no config found
+        [[ -f "$output_file" ]] && rm -f "$output_file"
+        return 0
+    fi
+    
+    # Write knockd configuration to file
+    echo "$knockd_config" > "$output_file"
+    
+    if [[ $? -eq 0 ]]; then
+        local profile_count=$(grep -c "^\[knockd\..*\]$" "$output_file" 2>/dev/null || echo "0")
+        print_success "Loaded $profile_count knockd profiles to: $output_file"
+        return 0
+    else
+        print_error "Failed to create knockd configuration file: $output_file"
+        return 1
+    fi
+}
 
 setup_knockd() { # {$1 = <action: start|stop>} - Control knockd service
     local action="$1"
@@ -154,10 +265,10 @@ get_ufw_status() { # {no args} - Get comprehensive UFW status information
     # Basic UFW status
     echo "=== UFW Status ==="
     if ufw status | grep -q "Status: active"; then
-        print_info "UFW: $GREEN [ACTIVE] $NC"
+        print_info "UFW:${GREEN}[ACTIVE]$NC"
         ufw status verbose | grep -v "^\s*$"
     else
-        print_info "UFW: $RED [INACTIVE] $NC"
+        print_info "UFW:${RED}[INACTIVE]$NC"
     fi
     echo
     
@@ -165,7 +276,7 @@ get_ufw_status() { # {no args} - Get comprehensive UFW status information
     local current_profile=$(get_state_value "ufw" "current_profile" "not set")
     echo "=== Current Profile ==="
     if [[ $current_profile == "not set" ]]; then
-        print_info "Profile is $RED UNSET $NC"
+        print_info "Profile is ${RED}UNSET$NC"
     else
         print_info "Profile: $current_profile"
     fi
@@ -196,7 +307,7 @@ get_ufw_status() { # {no args} - Get comprehensive UFW status information
     # Module state
     echo "=== Module State ==="
     local module_state=$(get_state_value "ufw" "status" "unknown")
-    [[ $module_state == "installed" ]] && print_info "${GREEN}[Installed]${NC}" || print_info "${RED}[$module_state]${NC}
+    [[ $module_state == "installed" ]] && print_info "${GREEN}[Installed]${NC}" || print_info "${RED}[$module_state]${NC}"
 }
 
 get_state_value() { # {$1 = <component>} {$2 = <key>} {$3 = <default>} - Get value from state

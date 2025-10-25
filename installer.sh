@@ -34,7 +34,7 @@ install_jq() {
         print_info "Installing jq..."
         if command -v apt-get &> /dev/null; then
             sudo apt-get update
-            sudo apt-get install -y jq
+            sudo apt-get install -y -q jq
         elif command -v yum &> /dev/null; then
             sudo yum install -y jq
         else
@@ -97,6 +97,46 @@ initialize_logging() {
     print_success "Logging system initialized"
 }
 
+check_file_format() { # {$1 = <file_path>} - Check and fix file format if needed
+    local file="$1"
+    
+    if [[ ! -f "$file" ]]; then
+        print_debug "File not found: $file"
+        return 0
+    fi
+    
+    if grep -q $'\r' "$file"; then
+        print_warning "Found Windows line endings in: $file"
+        if confirm_action "Convert to Unix format?"; then
+            if dos2unix "$file" 2>/dev/null || sed -i 's/\r$//' "$file"; then
+                print_success "Converted to Unix format: $file"
+            else
+                print_error "Failed to convert: $file"
+                return 1
+            fi
+        fi
+    else
+        print_debug "File format is correct: $file"
+    fi
+    return 0
+}
+
+check_all_config_files() { # {no args} - Check all config files in etc directory
+    local etc_dir="$PROJECT_DIR/etc"
+    
+    if [[ ! -d "$etc_dir" ]]; then
+        print_warning "etc directory not found: $etc_dir"
+        return 0
+    fi
+    
+    print_info "Checking config file formats..."
+    
+    for config_file in "$etc_dir"/*.conf "$etc_dir"/*.config; do
+        [[ -f "$config_file" ]] || continue
+        check_file_format "$config_file"
+    done
+}
+
 # Verify installation
 verify_installation() {
     print_info "Verifying installation..."
@@ -112,15 +152,13 @@ verify_installation() {
     fi
     
     # Check if project directory is accessible
-    if ! validate_directory "${PROJECT_DIR}"; then
-        ((errors++))
-    fi
+    validate_directory "${PROJECT_DIR}" || ((errors++))
     
     # Check if system directories are accessible
-    if ! validate_directory "/var/lib/alfred/state"; then
-        ((errors++))
-    fi
-    
+    validate_directory "/var/lib/alfred/state" || ((errors++))    
+
+    check_all_config_files || ((errors++))
+
     if [[ $errors -eq 0 ]]; then
         print_success "Installation verified successfully"
         update_state "Installer" "Installed"

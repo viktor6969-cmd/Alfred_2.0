@@ -22,7 +22,22 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MODULE_DIR="$(dirname "$SCRIPT_DIR")"
 ALFRED_ROOT="$(dirname "$MODULE_DIR")"
-source "$ALFRED_ROOT/lib/utils.sh"
+CONF_FILE="$ALFRED_ROOT/etc/ufw.conf"
+if [[ -f "$ALFRED_ROOT/lib/utils.sh" ]]; then
+    source "$ALFRED_ROOT/lib/utils.sh"
+else
+    echo "ERROR: Cannot find utils.sh at $ALFRED_ROOT/lib/utils.sh"
+    echo "Make sure the Alfred installation directory structure is intact"
+    exit 1
+fi
+
+if [[ -f "$ALFRED_ROOT/modules/ufw/ufw_functions.sh" ]]; then 
+    source "$ALFRED_ROOT/modules/ufw/ufw_functions.sh"
+else
+    echo "ERROR: Missing dependency: $ALFRED_ROOT/modules/ufw/ufw_functions.sh"
+    echo "Make sure the Alfred installation directory structure is intact"
+    exit 1
+fi
 
 # Dependencies array
 readonly UFW_DEPENDENCIES=("ufw" "fail2ban" "knockd")
@@ -144,40 +159,6 @@ initialize_state() { # {no args}
     update_state "ufw" "status" "installation_incomplete"
 }
 
-# Add this function to ufw_install.sh
-setup_knockd_configs() { # {no args} - Setup knockd configuration during installation
-    print_info "Setting up knockd configuration..."
-    
-    local ufw_conf="$ALFRED_ROOT/config/ufw.conf"
-    
-    # Extract all knockd configurations from ufw.conf
-    local knockd_config
-    knockd_config=$(awk '
-        /^[[:space:]]*#/ { next }
-        /^[[:space:]]*$/ { next }
-        
-        /^\[knockd\./ {
-            collecting = 1
-            print $0
-            next
-        }
-        
-        /^\[.*\]$/ && !/^\[knockd\./ {
-            collecting = 0
-            next
-        }
-        
-        collecting { print }
-    ' "$ufw_conf")
-    
-    if [[ -n "$knockd_config" ]]; then
-        echo "$knockd_config" > /etc/knockd.conf
-        print_success "Knockd configuration created"
-    else
-        print_warning "No knockd configuration found in ufw.conf"
-    fi
-}
-
 # =============================================================================
 # Removal Functions
 # =============================================================================
@@ -230,12 +211,13 @@ cleanup_state() { # {no args}
 # =============================================================================
 
 install_ufw() { # {no args}
+    local flag=${1:-}
     echo -e "Installing UFW Firewall Foundation"
     install_packages || return 1
-    stop_services
+    [[ ! $flag == "reinstall" ]] && stop_services
     create_backup "ufw" "/etc/ufw" || print_warning "No configuration to backup or backup failed"
-    setup_app_profiles
-    setup_knockd_configs
+    load_ufw_profiles
+    load_knockd_profiles
     initialize_state
     print_warning "Firewall is NOT active yet. Use 'alfred ufw stage <open|close|hide>' to applay a profile"
 }
@@ -257,9 +239,9 @@ main() { # {$1 = <action>}
     local action="${1:-install}"
     check_root || return 1
     case "$action" in
-        "install") install_ufw;;
+        "install") install_ufw ;;
         "remove") remove_ufw ;;
-        "reinstall") remove_ufw "reinstall" && install_ufw;;
+        "reinstall") remove_ufw "reinstall" && install_ufw "reinstall";;
         *)
             print_error "Unknown action: $action"
             echo "Usage: $0 [install|remove|reinstall]"

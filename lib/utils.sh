@@ -16,7 +16,7 @@ NC='\033[0m' # No Color
 # Yes regex for confirmation prompts
 YES_REGEX='^(yes|y|Y)$'
 # Debug mode
-readonly debug=1
+debug=1
 
 # =============================================================================
 # Print Functions
@@ -473,139 +473,70 @@ cleanup_backups() { # {$1 = <module_name>} {$2 = <keep_count> (optional, default
 # INI File Parsing Functions
 # =============================================================================
 
-# Get a specific profile section with header
-get_profile() { # {$1 = <profile_name>} {$2 = <config_file>} - Extract profile section with header
-    local profile_name="$1"
-    local config_file="$2"
+load_app_profiles() { # {$1 = <app_name>} {$2 = <config_file_path>} - Load profiles for specific app type
+    local app="${1:-}"
+    local path="${2:-}"
     
-    if [[ ! -f "$config_file" ]]; then
-        print_error "Config file not found: $config_file"
+    [[ -z "$app" ]] && { print_error "Missing app profile name"; return 1; }
+    [[ -z "$path" ]] && { print_error "Missing app profile path"; return 1; }
+    
+    case "$app" in 
+        ufw)
+            # UFW profiles: sections that don't contain dots
+            echo "$(get_profile_content "^[^.]*$" "$path")"
+            ;;
+        knockd)
+            # Knockd profiles: sections starting with "knockd."
+            get_profile_content "^knockd" "$path"
+            ;;
+        ssh)
+            # SSH profiles: sections starting with "ssh."  
+            get_profile_content "^ssh" "$path"
+            ;;
+        *)
+            print_error "Unknown app profile type: $app"
+            return 1
+            ;;
+    esac
+}
+
+get_profile_content() { # {$1 = <app_pattern>} {$2 = <config_file>} - Extract profiles by pattern
+    local app_pattern="$1"
+    local conf_file="$2"
+    
+    if [[ ! -f "$conf_file" ]]; then
+        print_error "Config file not found: $conf_file"
         return 1
     fi
     
-    # Use awk to extract the specific profile section
-    awk -v profile="$profile_name" '
-        /^[[:space:]]*#/ { next }  # Skip comment lines
-        /^[[:space:]]*$/ { next }  # Skip empty lines
-        
-        /^\[.*\]$/ {
-            if (found) { exit }
-            current_section = substr($0, 2, length($0)-2)  # Remove brackets
-            if (current_section == profile) {
-                found = 1
-                print $0  # Print the section header
-            }
-            next
+    print_debug "DEBUG: Searching for pattern: $app_pattern in file: $conf_file"
+    
+    # SIMPLE, WORKING VERSION
+    awk -v pattern="$app_pattern" '
+        { 
+            # Remove carriage returns from each line
+            gsub(/\r$/, "")
         }
         
-        found { print }
-    ' "$config_file"
-}
-
-# Get all UFW profiles from config file
-get_ufw_profiles() { # {$1 = <config_file>} - Extract all UFW profiles (sections without dots)
-    local config_file="$1"
-    
-    if [[ ! -f "$config_file" ]]; then
-        print_error "Config file not found: $config_file"
-        return 1
-    fi
-    
-    # Use awk to extract all simple sections (no dots in name)
-    awk '
-        /^[[:space:]]*#/ { next }  # Skip comment lines
-        /^[[:space:]]*$/ { next }  # Skip empty lines
-        
-        /^\[.*\]$/ {
-            # Extract section name without brackets
-            section_name = substr($0, 2, length($0)-2)
-            
-            # Only process sections without dots (simple UFW profiles)
-            if (section_name !~ /\./) {
-                # If we were already collecting a profile, add newline separator
-                if (collecting) {
-                    print ""  # Add blank line between profiles
-                }
-                collecting = 1
-                print $0  # Print section header
-            } else {
-                collecting = 0  # Stop collecting for sections with dots
-            }
-            next
-        }
-        
-        collecting { print }
-    ' "$config_file"
-}
-
-# Setup application profiles from ufw.conf
-setup_app_profiles() { # {no args} - Create single UFW profiles file
-    print_info "Setting up UFW application profiles..."
-    
-    local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
-    local ufw_apps_dir="/etc/ufw/applications.d"
-    local output_file="$ufw_apps_dir/alfred_profiles"
-    
-    if [[ ! -f "$ufw_conf" ]]; then
-        print_warning "UFW configuration file not found: $ufw_conf"
-        return 1
-    fi
-    
-    # Create applications directory if it doesn't exist
-    mkdir -p "$ufw_apps_dir"
-    
-    # Get all UFW profiles
-    local profiles_content
-    profiles_content=$(get_ufw_profiles "$ufw_conf")
-    
-    if [[ -z "$profiles_content" ]]; then
-        print_warning "No UFW profiles found in configuration"
-        return 0
-    fi
-    
-    # Write all profiles to single file
-    echo "$resolved_content" > "$output_file"
-
-    if [[ $? -eq 0 ]]; then
-        # Count how many profiles were created
-        local profile_count=$(grep -c "^\[.*\]$" "$output_file" 2>/dev/null || echo "0")
-        print_success "Created $profile_count UFW profiles in: $output_file"
-        return 0
-    else
-        print_error "Failed to create UFW profiles file: $output_file"
-        return 1
-    fi
-}
-
-setup_knockd_config() { # {no args} - Setup knockd configuration during installation
-    print_info "Setting up knockd configuration..."
-    
-    local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
-    
-    # Extract all knockd configurations from ufw.conf
-    local knockd_config
-    knockd_config=$(awk '
         /^[[:space:]]*#/ { next }
-        /^[[:space:]]*$/ { next }
-        
-        /^\[knockd\./ {
-            collecting = 1
-            print $0
-            next
+        /^[[:space:]]*$/ { 
+            if (collecting) { print "" }
+            next 
         }
         
-        /^\[.*\]$/ && !/^\[knockd\./ {
-            collecting = 0
+        /^\[.*\]$/ {
+            section_name = substr($0, 2, length($0)-1)
+            
+            if (section_name ~ pattern) {
+                if (collecting) { print "" }
+                collecting = 1
+                print $0
+            } else {
+                collecting = 0
+            }
             next
         }
         
         collecting { print }
-    ' "$ufw_conf")
-    
-    if [[ -n "$knockd_config" ]]; then
-        echo "$knockd_config" > /etc/knockd.conf
-        print_success "Knockd configuration created"
-    else
-        print_warning "No knockd configuration found in ufw.conf"
-    fi
+    ' "$conf_file"
 }
