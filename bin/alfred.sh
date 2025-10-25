@@ -212,7 +212,7 @@ main() { # {$@ = <command> <args>} - Main command handler
             exit_code=0 
             ;;
 
-      --install)
+    --install)
             if [[ -z "$arg" ]]; then
                 print_error "Please specify a module to install"
                 echo "Usage: alfred --install <module> <module> ..."
@@ -236,6 +236,7 @@ main() { # {$@ = <command> <args>} - Main command handler
                     # Handle multiple modules or single module
                     shift # Remove --install
                     for module in "$@"; do
+                        check_state "$module" "installed" && continue
                         manage_module "$module" "install" 
                         local result=$?
                         if [[ $result -eq 0 ]]; then
@@ -260,17 +261,6 @@ main() { # {$@ = <command> <args>} - Main command handler
             fi
             ;;
  
-    reload-profiles)
-            print_info "Reloading UFW application profiles..."
-            if load_ufw_profiles; then
-                print_success "UFW application profiles reloaded successfully"
-                return 0
-            else
-                print_error "Failed to reload UFW application profiles"
-                return 1
-            fi
-            ;;
-
     --status) 
             local module="$arg"
             if [[ -z "$module" ]]; then
@@ -289,21 +279,13 @@ main() { # {$@ = <command> <args>} - Main command handler
             exit_code=0
             ;;
 
-    --ufw) 
-            local mode="$arg"
-            if [[ -z "$mode" ]]; then
-                print_error "UFW profile is missing!"
-                echo "Usage: alfred --ufw (open|close|hide)"
-                exit 0
-            fi
-            check_state "ufw" "installed" || { print_error "Ufw module is not installed, pleace run alfred --install ufw" ; return 0; }
-            set_profile "$mode" && print_success "Curent rofile changed to $mod" || print_error "Failed to cahnge the profile" 
+    --ufw)
+            # Handle UFW commands
+            check_state "ufw" "installed" || { print_error "UFW module is missing, please run alfred --install ufw and try again"; return 0; }
+            shift
+            ufw_main "$@"
+            exit_code=$?
             ;;
-
-    get) 
-            local ufw_conf="$ALFRED_ROOT/etc/ufw.conf"
-            echo "$(load_app_profiles "ufw" "$ufw_conf")" ;;
-            
     *)      print_error "Unknown option: $command"; print_help; exit_code=0;;
   esac 
   return $exit_code
@@ -324,4 +306,4 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     
     # Final exit with proper code
     exit $exit_code
-fi
+fi  

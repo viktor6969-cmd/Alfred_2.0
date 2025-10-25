@@ -219,6 +219,7 @@ install_ufw() { # {no args}
     load_ufw_profiles
     load_knockd_profiles
     initialize_state
+    enable_ufw_persistence
     print_warning "Firewall is NOT active yet. Use 'alfred ufw stage <open|close|hide>' to applay a profile"
 }
 
@@ -228,6 +229,7 @@ remove_ufw() { # {$1 = "reinstall" (optional) Reinsallation flag}
         confirm_action "Do you want to remove the installed packages (ufw, fail2ban, knockd)?" && remove_packages
     fi
     restore_configuration
+    disable_ufw_persistence
     cleanup_state
 }
 

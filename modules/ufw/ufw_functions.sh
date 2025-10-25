@@ -36,12 +36,17 @@ set_open_profile() { # {no args} - Set open profile (allow common services)
         return 1
     fi
     
+    if [[ $(get_state_value "ufw" "current_profile" "not set") == "open" ]]; then
+        print_warning "The curent profile seems to be OPEN" 
+        confirm_action "Do you wish to reload the configurations ?" || { print_info "Aborting"; return 0; }
+    fi
+
     # Reset UFW to defaults
-    ufw --force reset
+    ufw --force reset 2>/dev/null | grep -v "Backing up"
     
     # Set default policies
-    ufw default deny incoming
-    ufw default allow outgoing
+    ufw default deny incoming >/dev/null 2>&1
+    ufw default allow outgoing >/dev/null 2>&1
     
     # Allow SSH-Open profile
     ufw allow "SSH-Open"
@@ -49,7 +54,9 @@ set_open_profile() { # {no args} - Set open profile (allow common services)
     
     # Allow all installed apps from state
     local installed_apps=$(get_state_value "ufw" "installed_apps" "")
-    if [[ -n "$installed_apps" ]]; then
+    
+    if [[ -n "$installed_apps" && ! "$installed_apps" == "[]" ]]; then
+        print_info $installed_apps
         IFS=',' read -ra apps <<< "$installed_apps"
         for app in "${apps[@]}"; do
             ufw allow "$app"
@@ -76,11 +83,11 @@ set_closed_profile() { # {no args} - Set closed profile (deny all + knockd)
     fi
     
     # Reset UFW to defaults
-    ufw --force reset
+    ufw --force reset 2>/dev/null | grep -v "Backing up"
     
     # Set restrictive defaults - deny everything
-    ufw default deny incoming
-    ufw default deny outgoing
+    ufw default deny incoming >/dev/null 2>&1
+    ufw default allow outgoing >/dev/null 2>&1
     
     # Enable knockd for closed profile
     setup_knockd "start"
@@ -109,6 +116,7 @@ set_hidden_profile() { # {no args} - Set hidden profile (placeholder)
 # ============================================================================
 # Util finctions
 # ============================================================================
+
 load_ufw_profiles() { # {no args} - Create UFW applications.d file with Alfred profiles
     print_info "Loading UFW application profiles..."
     
@@ -260,54 +268,52 @@ setup_knockd() { # {$1 = <action: start|stop>} - Control knockd service
 }
 
 get_ufw_status() { # {no args} - Get comprehensive UFW status information
-    print_header "  UFW Firewall Status"
-    
+
+    echo -e "\n=== ${CYAN}MODULE STATUS$NC ==============="    
+    # Module state
+    local module_state=$(get_state_value "ufw" "status" "unknown")
+    [[ $module_state == "installed" ]] && print_info "Module State:${GREEN}[Installed]${NC}" || print_info "Module State:${RED}[$module_state]${NC}"
+    echo -e "==============================\n\n"
+
+    echo -e "=== ${CYAN}UFW STATUS$NC ============"  
     # Basic UFW status
-    echo "=== UFW Status ==="
     if ufw status | grep -q "Status: active"; then
-        print_info "UFW:${GREEN}[ACTIVE]$NC"
         ufw status verbose | grep -v "^\s*$"
     else
-        print_info "UFW:${RED}[INACTIVE]$NC"
+        print_info "UFW status:${RED}[INACTIVE]$NC"
     fi
-    echo
+    echo "------------------------------"
     
     # Current profile from state
     local current_profile=$(get_state_value "ufw" "current_profile" "not set")
-    echo "=== Current Profile ==="
     if [[ $current_profile == "not set" ]]; then
-        print_info "Profile is ${RED}UNSET$NC"
+        print_info "Current Profile: ${RED}UNSET$NC"
     else
-        print_info "Profile: $current_profile"
+        print_info "Current Profile: ${YELLOW}$current_profile$NC"
     fi
-    echo
-    
+    echo -e "------------------------------"
+
     # Installed applications
-    echo "=== Installed Applications ==="
     local installed_apps=$(get_state_value "ufw" "installed_apps" "")
-    if [[ -n "$installed_apps" && ! "$installed_apps"=="[]" ]]; then
+    if [[ -n "$installed_apps" ]]; then
+        echo "Installed applications:"
         print_info "$installed_apps" | tr ',' '\n' | while read app; do
             print_info "• $app"
         done
     else
-        echo "No applications configured"
+        echo "No applications installed"
     fi
-    echo
+    echo -e "==============================\n\n"
     
     # Knockd status
-    echo "=== Knockd Status ==="
+    echo -e "=== ${CYAN}Knockd Status$NC ==========="
     if systemctl is-active --quiet knockd 2>/dev/null; then
-        print_info "Knockd:${GREEN}[ACTIVE]${NC}"
+        print_info "State:${GREEN}[ACTIVE]${NC}"
         systemctl status knockd --no-pager -l | head -10
     else
-        print_info "Knockd:${RED}[INACTIVE]${NC}"
+        print_info "State:${RED}[INACTIVE]${NC}"
     fi
-    echo
-    
-    # Module state
-    echo "=== Module State ==="
-    local module_state=$(get_state_value "ufw" "status" "unknown")
-    [[ $module_state == "installed" ]] && print_info "${GREEN}[Installed]${NC}" || print_info "${RED}[$module_state]${NC}"
+    echo "============================="
 }
 
 get_state_value() { # {$1 = <component>} {$2 = <key>} {$3 = <default>} - Get value from state
@@ -316,11 +322,108 @@ get_state_value() { # {$1 = <component>} {$2 = <key>} {$3 = <default>} - Get val
     local default="$3"
     local state_file="/var/lib/alfred/state/${component}.json"
     
-    if [[ -f "$state_file" ]] && command -v jq &> /dev/null; then
-        local value
-        value=$(jq -r ".${key} // \"$default\"" "$state_file" 2>/dev/null)
-        echo "$value"
-    else
+    if [[ ! -f "$state_file" ]]; then
         echo "$default"
+        return 0
+    fi
+    
+    if ! command -v jq &> /dev/null; then
+        echo "jq is missing"
+        return 0
+    fi
+    
+    local value
+    if [[ "$key" == "installed_apps" ]]; then
+        # For arrays, extract as comma-separated list without brackets
+        value=$(jq -r "if .${key} | type == \"array\" then .${key} | join(\",\") else \"$default\" end" "$state_file" 2>/dev/null)
+    else
+        # For regular values
+        value=$(jq -r ".${key} // \"$default\"" "$state_file" 2>/dev/null)
+    fi
+    
+    # If jq failed or returned null, use default
+    if [[ $? -ne 0 || "$value" == "null" || -z "$value" ]]; then
+        echo "$default"
+    else
+        echo "$value"
     fi
 }
+
+enable_ufw_persistence() { # {no args} - Enable UFW to start at boot
+    print_info "Enabling UFW to start at boot..."
+    
+    if systemctl enable ufw; then
+        print_success "UFW will now start automatically at boot"
+        return 0
+    else
+        print_error "Failed to enable UFW persistence"
+        return 1
+    fi
+}
+
+disable_ufw_persistence() { # {no args} - Disable UFW from starting at boot
+    print_info "Disabling UFW from starting at boot..."
+    
+    if systemctl disable ufw; then
+        print_success "UFW will NOT start automatically at boot"
+        return 0
+    else
+        print_error "Failed to disable UFW persistence"
+        return 1
+    fi
+}
+
+# =============================================================================
+# Main UFW Command Handler
+# =============================================================================
+
+ufw_main() { # {$@ = <command> <args>} - Main UFW command handler
+    local command="${1:-}"
+    local arg="${2:-}"
+    
+    case "$command" in
+        "status") get_ufw_status ;;
+        "reload-profiles") load_ufw_profiles ;;
+        "reload-knockd") load_knockd_profiles ;;
+        "profile")
+            case "$arg" in
+                "open"|"close"|"hide")
+                    set_profile "$arg"
+                    ;;
+                *)
+                    print_error "Invalid profile: $arg. Use: open, close, or hide"
+                    print_info "Current profiles:"
+                    echo "  open  - Allow common services + installed apps"
+                    echo "  close - Deny all traffic + enable knockd"
+                    echo "  hide  - Stealth mode + knockd (not implemented)"
+                    return 1
+                    ;;
+            esac
+            ;;
+        "knockd")
+            case "$arg" in
+                "start"|"stop")
+                    setup_knockd "$arg"
+                    ;;
+                "reload")
+                    load_knockd_profiles
+                    setup_knockd "stop"
+                    setup_knockd "start"
+                    ;;
+                *)
+                    print_error "Invalid knockd command: $arg. Use: start, stop, or reload"
+                    return 1
+                    ;;
+            esac
+            ;;
+        "help"|"")
+            print_ufw_help
+            ;;
+        *)
+            print_error "Unknown UFW command: $command"
+            print_ufw_help
+            return 1
+            ;;
+    esac
+}
+

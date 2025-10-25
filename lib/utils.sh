@@ -34,7 +34,7 @@ print_header() {
 
 print_help() { # {no args} - Print usage information
     cat << EOF
-$(print_header "Alfred - Server Setup Automation")
+$(print_logo)
 
 Usage: alfred [OPTION] [MODULE]
 
@@ -61,14 +61,45 @@ Note: Run with sudo for full functionality
 EOF
 }
 
+print_ufw_help() { # {no args} - Print UFW help information
+    cat << EOF
+$(print_header "Alfred UFW Firewall Management")
+
+Usage: alfred ufw <command> [option]
+
+Commands:
+  status                    Show UFW firewall status
+  reload-profiles          Reload UFW application profiles
+  reload-knockd            Reload knockd configuration
+  profile <open|close|hide> Set firewall profile
+  knockd <start|stop|reload> Control knockd service
+  disable                  Disable UFW firewall
+  help                     Show this help message
+
+Profiles:
+  open    - Allow SSH + installed application profiles
+  close   - Deny all traffic + enable knockd for access
+  hide    - Stealth mode + knockd (coming soon)
+
+Examples:
+  alfred ufw status
+  alfred ufw profile open
+  alfred ufw profile close
+  alfred ufw knockd start
+  alfred ufw reload-profiles
+  alfred ufw disable
+
+Note: Run with sudo for full functionality
+EOF
+}
 
 print_logo(){
     echo -e "
   ___  _  __              _   _____  _____ 
  / _ \| |/ _|            | | / __  \|  _  |
-/ /_\ \ | |_ _ __ ___  __| | `' / /'| |/' |
-|  _  | |  _| '__/ _ \/ _` |   / /  |  /| |
-| | | | | | | | |  __/ (_| | ./ /___\ |_/ /
+/ /_\ \ | |_ _ __ ___  __| | \_ /  /| |/  |
+|  _  | |  _| '__/ _ \/ _  |   /  / |  /| |
+| | | | | | | | |  __/ (_| |  /  /__\ |_/ /
 \_| |_/_|_| |_|  \___|\__,_| \_____(_)___/ 
     "
 }
@@ -508,10 +539,7 @@ get_profile_content() { # {$1 = <app_pattern>} {$2 = <config_file>} - Extract pr
         print_error "Config file not found: $conf_file"
         return 1
     fi
-    
-    print_debug "DEBUG: Searching for pattern: $app_pattern in file: $conf_file"
-    
-    # SIMPLE, WORKING VERSION
+
     awk -v pattern="$app_pattern" '
         { 
             # Remove carriage returns from each line
